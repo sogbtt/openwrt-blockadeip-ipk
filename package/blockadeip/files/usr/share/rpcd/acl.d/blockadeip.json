@@ -3,13 +3,13 @@
     "description": "Grant access to BlockadeIP",
     "read": {
       "ubus": {
-        "blockadeip": [ "status", "banlist", "logs" ]
+        "blockadeip": [ "status", "banlist", "logs", "config", "public" ]
       },
       "uci": [ "blockadeip" ]
     },
     "write": {
       "ubus": {
-        "blockadeip": [ "add", "delete", "flush", "reload", "public", "config", "autostart" ]
+        "blockadeip": [ "add", "delete", "flush", "reload", "public", "set_enabled", "set_autostart", "save_config", "simulate" ]
       },
       "uci": [ "blockadeip" ]
     }

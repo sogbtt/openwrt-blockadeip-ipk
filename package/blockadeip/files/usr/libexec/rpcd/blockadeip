@@ -1,91 +1,83 @@
 #!/bin/sh
 
-read_input() {
-	cat > /tmp/blockadeip-rpc.$$
-}
-
-get_json_value() {
-	jsonfilter -i /tmp/blockadeip-rpc.$$ -e "@.$1" 2>/dev/null
-}
+TMP="/tmp/blockadeip-rpc.$$"
+read_input() { cat > "$TMP"; }
+jget() { jsonfilter -i "$TMP" -e "@.$1" 2>/dev/null; }
+reply() { printf '{"ok":%s,"message":"%s"}\n' "$1" "$(printf '%s' "$2" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
 
 [ "$1" = "call" ] && shift
 
 case "$1" in
-	list)
-		cat <<'JSON'
+        list)
+                cat <<'JSON'
 {
   "status": {},
   "banlist": {},
-  "add": { "ip": "string" },
-  "delete": { "ip": "string" },
+  "logs": { "limit": "String" },
+  "config": {},
+  "add": { "ip": "String" },
+  "delete": { "ip": "String" },
   "flush": {},
-  "logs": { "limit": "integer" },
   "reload": {},
   "public": {},
-  "config": { "threshold": "integer", "window": "integer" },
-  "autostart": { "enabled": "integer" }
+  "set_enabled": { "enabled": "String" },
+  "set_autostart": { "enabled": "String" },
+  "save_config": { "threshold": "String", "window": "String", "web_patterns": "String", "ssh_patterns": "String", "extra_patterns": "String", "bark_enabled": "String", "bark_server": "String", "bark_template": "String", "bark_custom_template": "String" },
+  "simulate": { "ip": "String" }
 }
 JSON
-		;;
-	status)
-		/usr/sbin/blockadeip status-json
-		;;
-	banlist)
-		/usr/sbin/blockadeip banlist-json
-		;;
-	add)
-		read_input
-		ip="$(get_json_value ip)"
-		rm -f /tmp/blockadeip-rpc.$$
-		out="$(/usr/sbin/blockadeip add "$ip" 0 manual_luci 2>&1)"; rc=$?
-		[ $rc -eq 0 ] && printf '{"ok":true,"message":"%s"}\n' "$out" || printf '{"ok":false,"message":"%s"}\n' "$out"
-		;;
-	delete)
-		read_input
-		ip="$(get_json_value ip)"
-		rm -f /tmp/blockadeip-rpc.$$
-		out="$(/usr/sbin/blockadeip del "$ip" 2>&1)"; rc=$?
-		[ $rc -eq 0 ] && printf '{"ok":true,"message":"%s"}\n' "$out" || printf '{"ok":false,"message":"%s"}\n' "$out"
-		;;
-	flush)
-		out="$(/usr/sbin/blockadeip flush 2>&1)"; rc=$?
-		[ $rc -eq 0 ] && printf '{"ok":true,"message":"%s"}\n' "$out" || printf '{"ok":false,"message":"%s"}\n' "$out"
-		;;
-	logs)
-		read_input
-		limit="$(get_json_value limit)"
-		rm -f /tmp/blockadeip-rpc.$$
-		[ -n "$limit" ] || limit=100
-		/usr/sbin/blockadeip logs-json "$limit"
-		;;
-	reload)
-		/etc/init.d/blockadeip reload >/dev/null 2>&1
-		printf '{"ok":true}\n'
-		;;
-	public)
-		/usr/sbin/blockadeip public >/dev/null 2>&1
-		printf '{"ok":true}\n'
-		;;
-	config)
-		read_input
-		threshold="$(get_json_value threshold)"
-		window="$(get_json_value window)"
-		rm -f /tmp/blockadeip-rpc.$$
-		out="$(/usr/sbin/blockadeip set-config "$threshold" "$window" 2>&1)"; rc=$?
-		[ $rc -eq 0 ] && printf '{"ok":true,"message":"%s"}\n' "$out" || printf '{"ok":false,"message":"%s"}\n' "$out"
-		;;
-	autostart)
-		read_input
-		enabled="$(get_json_value enabled)"
-		rm -f /tmp/blockadeip-rpc.$$
-		if [ "$enabled" = "1" ]; then
-			/etc/init.d/blockadeip enable >/dev/null 2>&1
-		else
-			/etc/init.d/blockadeip disable >/dev/null 2>&1
-		fi
-		printf '{"ok":true}\n'
-		;;
-	*)
-		printf '{"ok":false,"message":"unknown method"}\n'
-		;;
+                ;;
+        status) /usr/sbin/blockadeip status-json ;;
+        banlist) /usr/sbin/blockadeip banlist-json ;;
+        logs)
+                read_input; limit="$(jget limit)"; rm -f "$TMP"; [ -n "$limit" ] || limit=100
+                /usr/sbin/blockadeip logs-json "$limit"
+                ;;
+        config) /usr/sbin/blockadeip config-json ;;
+        add)
+                read_input; ip="$(jget ip)"; rm -f "$TMP"
+                out="$(/usr/sbin/blockadeip add "$ip" 0 manual_luci 2>&1)"; rc=$?
+                [ $rc -eq 0 ] && reply true "$out" || reply false "$out"
+                ;;
+        delete)
+                read_input; ip="$(jget ip)"; rm -f "$TMP"
+                out="$(/usr/sbin/blockadeip del "$ip" 2>&1)"; rc=$?
+                [ $rc -eq 0 ] && reply true "$out" || reply false "$out"
+                ;;
+        flush)
+                out="$(/usr/sbin/blockadeip flush 2>&1)"; rc=$?
+                [ $rc -eq 0 ] && reply true "$out" || reply false "$out"
+                ;;
+        reload)
+                out="$(/usr/sbin/blockadeip reload 2>&1)"; rc=$?
+                [ $rc -eq 0 ] && reply true "$out" || reply false "$out"
+                ;;
+        public)
+                /usr/sbin/blockadeip public >/dev/null 2>&1
+                reply true "public refreshed"
+                ;;
+        set_enabled)
+                read_input; v="$(jget enabled)"; rm -f "$TMP"
+                out="$(/usr/sbin/blockadeip set-enabled "$v" 2>&1)"; rc=$?
+                [ $rc -eq 0 ] && reply true "$out" || reply false "$out"
+                ;;
+        set_autostart)
+                read_input; v="$(jget enabled)"; rm -f "$TMP"
+                out="$(/usr/sbin/blockadeip set-autostart "$v" 2>&1)"; rc=$?
+                [ $rc -eq 0 ] && reply true "$out" || reply false "$out"
+                ;;
+        save_config)
+                read_input
+                th="$(jget threshold)"; win="$(jget window)"; web="$(jget web_patterns)"; ssh="$(jget ssh_patterns)"; extra="$(jget extra_patterns)"
+                be="$(jget bark_enabled)"; bs="$(jget bark_server)"; bt="$(jget bark_template)"; bc="$(jget bark_custom_template)"
+                rm -f "$TMP"
+                out="$(/usr/sbin/blockadeip save-config "$th" "$win" "$web" "$ssh" "$extra" "$be" "$bs" "$bt" "$bc" 2>&1)"; rc=$?
+                [ $rc -eq 0 ] && reply true "$out" || reply false "$out"
+                ;;
+        simulate)
+                read_input; ip="$(jget ip)"; rm -f "$TMP"
+                out="$(/usr/sbin/blockadeip simulate "$ip" 2>&1)"; rc=$?
+                [ $rc -eq 0 ] && reply true "$out" || reply false "$out"
+                ;;
+        *) reply false "unknown method" ;;
 esac

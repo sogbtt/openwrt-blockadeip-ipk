@@ -1,7 +1,7 @@
 {
   "admin/services/blockadeip": {
-    "title": "SSH安全卫士",
-    "order": 80,
+    "title": "SSH安全卫士 / BlockadeIP",
+    "order": 60,
     "action": {
       "type": "view",
       "path": "blockadeip/overview"

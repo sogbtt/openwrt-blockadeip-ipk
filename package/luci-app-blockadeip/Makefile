@@ -1,14 +1,13 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-blockadeip
-PKG_VERSION:=1.2.0
-PKG_RELEASE:=1
-PKG_MAINTAINER:=sogbtt
+PKG_VERSION:=1.3.0
+PKG_RELEASE:=r1
 PKG_LICENSE:=MIT
-PKGARCH:=all
+PKG_MAINTAINER:=sogbtt
 
 LUCI_TITLE:=LuCI support for BlockadeIP
-LUCI_DEPENDS:=+blockadeip +luci-base
+LUCI_DEPENDS:=+blockadeip +luci-base +rpcd +rpcd-mod-ucode
 LUCI_PKGARCH:=all
 
 include $(TOPDIR)/feeds/luci/luci.mk

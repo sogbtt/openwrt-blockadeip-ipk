@@ -1,55 +1,47 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>BlockadeIP 拦截记录</title>
-  <style>
-    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,"Microsoft YaHei",sans-serif;background:#101418;color:#e8eef5}
-    .wrap{max-width:1040px;margin:0 auto;padding:36px 18px}
-    .hero{background:linear-gradient(135deg,#1d2733,#111820);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:28px;box-shadow:0 16px 50px rgba(0,0,0,.22)}
-    h1{margin:0 0 8px;font-size:30px}.sub{color:#9fb0c3;margin:0 0 24px;line-height:1.7}.num{font-size:52px;font-weight:800;letter-spacing:-1px}.muted{color:#9fb0c3}
-    table{width:100%;border-collapse:collapse;margin-top:22px;background:rgba(255,255,255,.03);border-radius:14px;overflow:hidden;table-layout:fixed}
-    th,td{text-align:left;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.06);word-break:break-all}th{color:#b7c6d7;font-weight:600;background:rgba(255,255,255,.04)}tr:last-child td{border-bottom:none}
-    .pill{display:inline-block;padding:4px 9px;border-radius:999px;background:#27364a;color:#cfe1ff;font-size:12px}.footer{margin-top:18px;color:#74869a;font-size:13px;line-height:1.7}
-    .ip{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#fff}.reason{color:#d8e7ff}
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BlockadeIP 安全拦截记录</title>
+<style>
+:root{--bg:#08090d;--panel:#11131a;--red:#ff2b3d;--red2:#ff6b35;--text:#f8f8f8;--muted:#a8adb7;--line:#2a2e38;--green:#45ff9a}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#2a0d14 0,#08090d 42%,#050507 100%);color:var(--text);font-family:Arial,"Microsoft YaHei",sans-serif;min-height:100vh}.wrap{max-width:1100px;margin:0 auto;padding:48px 20px}.hero{border:1px solid rgba(255,43,61,.45);background:linear-gradient(135deg,rgba(255,43,61,.18),rgba(17,19,26,.96));border-radius:18px;padding:30px;box-shadow:0 0 36px rgba(255,43,61,.2)}.badge{display:inline-block;background:var(--red);color:#fff;padding:7px 14px;border-radius:999px;font-weight:800;letter-spacing:2px;box-shadow:0 0 20px rgba(255,43,61,.65)}h1{font-size:38px;margin:20px 0 10px;letter-spacing:1px}.sub{color:var(--muted);line-height:1.8}.stats{display:flex;gap:18px;flex-wrap:wrap;margin:28px 0}.card{flex:1;min-width:220px;background:rgba(17,19,26,.92);border:1px solid var(--line);border-radius:16px;padding:22px}.num{font-size:54px;font-weight:900;color:var(--red);text-shadow:0 0 24px rgba(255,43,61,.45)}.label{color:var(--muted);margin-top:8px}.panel{margin-top:24px;background:rgba(17,19,26,.95);border:1px solid var(--line);border-radius:16px;overflow:hidden}.panel-title{padding:18px 20px;border-bottom:1px solid var(--line);font-size:18px;font-weight:800;color:#fff}.table-wrap{max-height:520px;overflow:auto}table{width:100%;border-collapse:collapse}th,td{padding:14px 16px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}th{position:sticky;top:0;background:#171a23;color:#fff;z-index:1}td{color:#e7e9ee}.ip{font-weight:800;color:#fff}.reason{color:var(--red2);font-weight:700}.empty{text-align:center;color:var(--muted);padding:36px}.foot{margin-top:22px;color:var(--muted);font-size:13px;line-height:1.7}.pulse{animation:pulse 1.6s infinite}@keyframes pulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.35)}}
+</style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="hero">
-      <h1>BlockadeIP 安全拦截记录</h1>
-      <p class="sub">系统已启用早期入站封禁策略。异常登录、SSH 爆破、WEB 后台爆破等高风险来源将被记录并拦截。</p>
-      <div class="muted">当前封禁数量</div>
-      <div class="num" id="total">--</div>
-      <div class="muted">更新时间：<span id="updated">--</span></div>
-      <table>
-        <thead><tr><th style="width:22%">时间</th><th style="width:12%">动作</th><th style="width:22%">来源 IP</th><th style="width:10%">次数</th><th>原因</th></tr></thead>
-        <tbody id="rows"><tr><td colspan="5" class="muted">读取中...</td></tr></tbody>
-      </table>
-      <div class="footer">公开页按完整 IP 展示拦截记录，用于安全威慑。请确认该页面暴露范围符合你的运维策略。</div>
+<div class="wrap">
+  <div class="hero">
+    <span class="badge pulse">SECURITY INTERCEPT</span>
+    <h1>BlockadeIP 安全拦截记录</h1>
+    <div class="sub">系统已启用早期入站封禁策略。异常登录、SSH 爆破、WEB 后台爆破等高风险来源将被记录并拦截。</div>
+    <div class="stats">
+      <div class="card"><div class="num" id="total">0</div><div class="label">当前封禁数量</div></div>
+      <div class="card"><div id="updated" style="font-size:22px;font-weight:800">-</div><div class="label">更新时间</div></div>
     </div>
   </div>
+  <div class="panel">
+    <div class="panel-title">爆破攻击 / 高风险来源公开处刑列表</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>时间</th><th>动作</th><th>来源 IP</th><th>次数</th><th>原因</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5" class="empty">正在读取拦截记录...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="foot">公开页按完整 IP 展示拦截记录，用于安全威慑。请确认该页面暴露范围符合你的运维策略。</div>
+</div>
 <script>
-function esc(v){return String(v == null ? '' : v).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
-fetch('data.json?ts=' + Date.now()).then(r => r.json()).then(d => {
-  document.getElementById('total').textContent = d.total_banned || 0;
-  document.getElementById('updated').textContent = d.updated_at || '--';
-  const rows = document.getElementById('rows');
-  rows.innerHTML = '';
-  const items = d.items || [];
-  if (!items.length) {
-    rows.innerHTML = '<tr><td colspan="5" class="muted">暂无拦截记录</td></tr>';
-    return;
-  }
-  items.slice().reverse().forEach(x => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td>' + esc(x.time) + '</td><td><span class="pill">' + esc(x.action) + '</span></td><td class="ip">' + esc(x.ip) + '</td><td>' + esc(x.count || 0) + '</td><td class="reason">' + esc(x.reason) + '</td>';
-    rows.appendChild(tr);
-  });
-}).catch(() => {
-  document.getElementById('rows').innerHTML = '<tr><td colspan="5" class="muted">data.json 暂不可读</td></tr>';
-});
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+fetch('data.json?ts='+Date.now()).then(r=>r.json()).then(d=>{
+  document.getElementById('total').textContent=d.total_banned||0;
+  document.getElementById('updated').textContent=d.updated_at||'-';
+  var rows=document.getElementById('rows'); rows.innerHTML='';
+  if(!d.items||!d.items.length){rows.innerHTML='<tr><td colspan="5" class="empty">暂无拦截记录</td></tr>';return}
+  d.items.forEach(x=>{
+    rows.insertAdjacentHTML('beforeend','<tr><td>'+esc(x.time)+'</td><td>'+esc(x.action)+'</td><td class="ip">'+esc(x.ip)+'</td><td>'+esc(x.count)+'</td><td class="reason">'+esc(x.reason)+'</td></tr>')
+  })
+}).catch(()=>{document.getElementById('rows').innerHTML='<tr><td colspan="5" class="empty">读取 data.json 失败</td></tr>'})
 </script>
 </body>
 </html>
