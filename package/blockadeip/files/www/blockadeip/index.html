@@ -3,28 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BlockadeIP 安全拦截记录</title>
+<title>BlockadeIP 公开处刑台</title>
 <style>
-:root{--bg:#08090d;--panel:#11131a;--red:#ff2b3d;--red2:#ff6b35;--text:#f8f8f8;--muted:#a8adb7;--line:#2a2e38;--green:#45ff9a}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#2a0d14 0,#08090d 42%,#050507 100%);color:var(--text);font-family:Arial,"Microsoft YaHei",sans-serif;min-height:100vh}.wrap{max-width:1100px;margin:0 auto;padding:48px 20px}.hero{border:1px solid rgba(255,43,61,.45);background:linear-gradient(135deg,rgba(255,43,61,.18),rgba(17,19,26,.96));border-radius:18px;padding:30px;box-shadow:0 0 36px rgba(255,43,61,.2)}.badge{display:inline-block;background:var(--red);color:#fff;padding:7px 14px;border-radius:999px;font-weight:800;letter-spacing:2px;box-shadow:0 0 20px rgba(255,43,61,.65)}h1{font-size:38px;margin:20px 0 10px;letter-spacing:1px}.sub{color:var(--muted);line-height:1.8}.stats{display:flex;gap:18px;flex-wrap:wrap;margin:28px 0}.card{flex:1;min-width:220px;background:rgba(17,19,26,.92);border:1px solid var(--line);border-radius:16px;padding:22px}.num{font-size:54px;font-weight:900;color:var(--red);text-shadow:0 0 24px rgba(255,43,61,.45)}.label{color:var(--muted);margin-top:8px}.panel{margin-top:24px;background:rgba(17,19,26,.95);border:1px solid var(--line);border-radius:16px;overflow:hidden}.panel-title{padding:18px 20px;border-bottom:1px solid var(--line);font-size:18px;font-weight:800;color:#fff}.table-wrap{max-height:520px;overflow:auto}table{width:100%;border-collapse:collapse}th,td{padding:14px 16px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}th{position:sticky;top:0;background:#171a23;color:#fff;z-index:1}td{color:#e7e9ee}.ip{font-weight:800;color:#fff}.reason{color:var(--red2);font-weight:700}.empty{text-align:center;color:var(--muted);padding:36px}.foot{margin-top:22px;color:var(--muted);font-size:13px;line-height:1.7}.pulse{animation:pulse 1.6s infinite}@keyframes pulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.35)}}
+:root{--bg:#050508;--panel:#101116;--red:#ff253a;--deep:#720012;--orange:#ff7a1a;--text:#fff;--muted:#a8adb7;--line:#2d3038;--black:#050507}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 50% 0,#4a0612 0,#16050a 38%,#050508 100%);color:var(--text);font-family:Arial,"Microsoft YaHei",sans-serif;min-height:100vh}.wrap{max-width:1180px;margin:0 auto;padding:42px 20px}.hero{position:relative;overflow:hidden;border:1px solid rgba(255,37,58,.58);background:linear-gradient(135deg,rgba(114,0,18,.92),rgba(16,17,22,.96) 55%,rgba(5,5,7,.98));border-radius:20px;padding:34px;box-shadow:0 0 46px rgba(255,37,58,.26)}.hero:after{content:"BLOCKED";position:absolute;right:-20px;top:18px;font-size:92px;font-weight:900;letter-spacing:4px;color:rgba(255,255,255,.035);transform:rotate(-8deg)}.badge{display:inline-block;background:var(--red);color:#fff;padding:8px 16px;border-radius:999px;font-weight:900;letter-spacing:3px;box-shadow:0 0 22px rgba(255,37,58,.8)}h1{font-size:42px;margin:20px 0 10px;letter-spacing:2px}.sub{color:#e8e8e8;line-height:1.9;max-width:780px}.stats{display:flex;gap:18px;flex-wrap:wrap;margin:30px 0 0}.card{flex:1;min-width:240px;background:rgba(5,5,7,.55);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:22px}.num{font-size:58px;font-weight:900;color:var(--red);text-shadow:0 0 24px rgba(255,37,58,.65)}.label{color:var(--muted);margin-top:8px}.panel{margin-top:24px;background:rgba(16,17,22,.96);border:1px solid rgba(255,37,58,.35);border-radius:16px;overflow:hidden;box-shadow:0 0 24px rgba(0,0,0,.25)}.panel-title{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:18px 20px;border-bottom:1px solid var(--line);font-size:18px;font-weight:900;color:#fff;background:linear-gradient(90deg,rgba(255,37,58,.18),rgba(255,122,26,.06))}.hint{font-size:13px;color:var(--muted);font-weight:400}.table-wrap{max-height:650px;overflow-y:auto}table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{padding:14px 16px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}th{position:sticky;top:0;background:#191b24;color:#fff;z-index:1}td{color:#e7e9ee}.ip{font-weight:900;color:#fff;font-family:Consolas,monospace}.reason{color:var(--orange);font-weight:800}.empty{text-align:center;color:var(--muted);padding:38px}.foot{margin-top:22px;color:var(--muted);font-size:13px;line-height:1.8}.pulse{animation:pulse 1.35s infinite}@keyframes pulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.45)}}@media(max-width:700px){h1{font-size:30px}.table-wrap{max-height:520px}th,td{padding:12px 10px;font-size:13px}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="hero">
-    <span class="badge pulse">SECURITY INTERCEPT</span>
-    <h1>BlockadeIP 安全拦截记录</h1>
-    <div class="sub">系统已启用早期入站封禁策略。异常登录、SSH 爆破、WEB 后台爆破等高风险来源将被记录并拦截。</div>
+    <span class="badge pulse">HIGH RISK BLOCKED</span>
+    <h1>BlockadeIP 爆破攻击公开处刑台</h1>
+    <div class="sub">系统已启用早期入站封禁策略。异常登录、SSH 爆破、WEB 后台爆破等高风险来源将被记录并拦截。此页面用于安全威慑与公开告警。</div>
     <div class="stats">
       <div class="card"><div class="num" id="total">0</div><div class="label">当前封禁数量</div></div>
       <div class="card"><div id="updated" style="font-size:22px;font-weight:800">-</div><div class="label">更新时间</div></div>
     </div>
   </div>
   <div class="panel">
-    <div class="panel-title">爆破攻击 / 高风险来源公开处刑列表</div>
+    <div class="panel-title"><span>爆破攻击 / 高风险来源公开处刑列表</span><span class="hint">默认加载最近记录；表格高度约 20 条，滚动查看更多</span></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>时间</th><th>动作</th><th>来源 IP</th><th>次数</th><th>原因</th></tr></thead>
+        <thead><tr><th style="width:23%">时间</th><th style="width:13%">动作</th><th style="width:25%">来源 IP</th><th style="width:10%">次数</th><th>原因</th></tr></thead>
         <tbody id="rows"><tr><td colspan="5" class="empty">正在读取拦截记录...</td></tr></tbody>
       </table>
     </div>
@@ -39,7 +38,7 @@ fetch('data.json?ts='+Date.now()).then(r=>r.json()).then(d=>{
   var rows=document.getElementById('rows'); rows.innerHTML='';
   if(!d.items||!d.items.length){rows.innerHTML='<tr><td colspan="5" class="empty">暂无拦截记录</td></tr>';return}
   d.items.forEach(x=>{
-    rows.insertAdjacentHTML('beforeend','<tr><td>'+esc(x.time)+'</td><td>'+esc(x.action)+'</td><td class="ip">'+esc(x.ip)+'</td><td>'+esc(x.count)+'</td><td class="reason">'+esc(x.reason)+'</td></tr>')
+    rows.insertAdjacentHTML('beforeend','<tr><td title="'+esc(x.time)+'">'+esc(x.time)+'</td><td>'+esc(x.action)+'</td><td class="ip" title="'+esc(x.ip)+'">'+esc(x.ip)+'</td><td>'+esc(x.count)+'</td><td class="reason" title="'+esc(x.reason)+'">'+esc(x.reason)+'</td></tr>')
   })
 }).catch(()=>{document.getElementById('rows').innerHTML='<tr><td colspan="5" class="empty">读取 data.json 失败</td></tr>'})
 </script>

@@ -23,7 +23,10 @@ case "$1" in
   "set_enabled": { "enabled": "String" },
   "set_autostart": { "enabled": "String" },
   "save_config": { "threshold": "String", "window": "String", "web_patterns": "String", "ssh_patterns": "String", "extra_patterns": "String", "bark_enabled": "String", "bark_server": "String", "bark_template": "String", "bark_custom_template": "String" },
-  "simulate": { "ip": "String" }
+  "simulate": { "ip": "String" },
+  "clear_logs": {},
+  "bark_test": {},
+  "login_button": { "action": "String" }
 }
 JSON
                 ;;
@@ -77,6 +80,20 @@ JSON
         simulate)
                 read_input; ip="$(jget ip)"; rm -f "$TMP"
                 out="$(/usr/sbin/blockadeip simulate "$ip" 2>&1)"; rc=$?
+                [ $rc -eq 0 ] && reply true "$out" || reply false "$out"
+                ;;
+        clear_logs)
+                out="$(/usr/sbin/blockadeip clear-logs 2>&1)"; rc=$?
+                [ $rc -eq 0 ] && reply true "$out" || reply false "$out"
+                ;;
+        bark_test)
+                out="$(/usr/sbin/blockadeip bark-test 2>&1)"; rc=$?
+                [ $rc -eq 0 ] && reply true "$out" || reply false "$out"
+                ;;
+        login_button)
+                read_input; action="$(jget action)"; rm -f "$TMP"
+                [ -n "$action" ] || action=install
+                out="$(/usr/sbin/blockadeip login-button "$action" 2>&1)"; rc=$?
                 [ $rc -eq 0 ] && reply true "$out" || reply false "$out"
                 ;;
         *) reply false "unknown method" ;;

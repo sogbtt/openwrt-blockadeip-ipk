@@ -6,11 +6,13 @@ STATE_DIR="/tmp/blockadeip"
 ATTEMPT_DIR="$STATE_DIR/attempts"
 RUNTIME_BACKEND="$STATE_DIR/backend"
 RUNTIME_FIFO="$STATE_DIR/logread.fifo"
+RUNTIME_LOGREAD_PID="$STATE_DIR/logread.pid"
 LOCK_DIR="$STATE_DIR/lock"
 BANLIST="/etc/blockadeip/banlist"
 RECORDS="/etc/blockadeip/records.tsv"
 LOG_PATH="/etc/blockadeip/blockadeip.log"
-VERSION="1.3.0"
+VERSION="1.4.0"
+CHANGELOG="V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
 REPO_URL="https://github.com/sogbtt/openwrt-blockadeip-ipk"
 
 mkdirs() {
@@ -28,23 +30,39 @@ load_cfg() {
         config_get window main window 300
         config_get ban_time main ban_time 0
         config_get public_page main public_page 1
-        config_get public_limit main public_limit 100
+        config_get public_limit main public_limit 200
         config_get public_path main public_path /www/blockadeip
         config_get log_path main log_path /etc/blockadeip/blockadeip.log
         config_get records_path main records_path /etc/blockadeip/records.tsv
         config_get show_full_ip main show_full_ip 1
         config_get version main version "$VERSION"
         config_get repo_url main repo_url "$REPO_URL"
-        config_get changelog main changelog "V1.3"
+        config_get changelog main changelog "$CHANGELOG"
         config_get web_patterns main web_patterns 'luci: failed login|Login failed|uwsgi-luci.*failed login|nginx.*login failed|openresty.*login failed'
         config_get ssh_patterns main ssh_patterns 'bad password|Failed password|invalid user|Exit before auth|authentication failure|dropbear|sshd'
         config_get extra_patterns main extra_patterns ''
-        config_get bark_enabled bark enabled 0
-        config_get bark_server bark server ''
-        config_get bark_template bark template simple
-        config_get bark_custom_template bark custom_template 'BlockadeIP: {ip} was blocked, reason={reason}, count={count}, time={time}'
+        config_get login_button main login_button 1
+        config_get bark_enabled push enabled ''
+        [ -n "$bark_enabled" ] || config_get bark_enabled bark enabled 0
+        config_get bark_server push server ''
+        [ -n "$bark_server" ] || config_get bark_server bark server ''
+        config_get bark_template push template ''
+        [ -n "$bark_template" ] || config_get bark_template bark template simple
+        config_get bark_custom_template push custom_template ''
+        [ -n "$bark_custom_template" ] || config_get bark_custom_template bark custom_template '【BlockadeIP】已封禁 {ip}，原因：{reason}，次数：{count}，时间：{time}'
         LOG_PATH="$log_path"
         RECORDS="$records_path"
+        [ "$version" = "$VERSION" ] || version="$VERSION"
+        case "$changelog" in ""|V1.3|V1.2|V1.1) changelog="$CHANGELOG" ;; esac
+}
+
+ensure_config_defaults() {
+        uci -q set blockadeip.main.version="$VERSION"
+        uci -q set blockadeip.main.repo_url="$REPO_URL"
+        uci -q set blockadeip.main.changelog="$CHANGELOG"
+        [ -n "$(uci -q get blockadeip.main.login_button 2>/dev/null)" ] || uci -q set blockadeip.main.login_button='1'
+        uci -q get blockadeip.push >/dev/null 2>&1 || uci -q set blockadeip.push=bark
+        uci -q commit blockadeip
 }
 
 lock_acquire() {
@@ -252,24 +270,41 @@ ensure_public_index() {
         update_public
 }
 
+bark_template_body() {
+        local ip="$1" count="$2" reason="$3" ts="$4" body
+        case "$bark_template" in
+                full)
+                        body="【BlockadeIP安全拦截】\n来源IP：$ip\n封禁原因：$(label_reason "$reason")\n触发次数：$count\n封禁时间：$ts\n处理结果：已加入早期入站封禁列表" ;;
+                ops)
+                        body="BlockadeIP提醒：$ip 已被封禁；原因：$(label_reason "$reason")；次数：$count；时间：$ts" ;;
+                custom)
+                        body="$bark_custom_template"
+                        body="$(printf '%s' "$body" | sed "s/{ip}/$ip/g; s/{reason}/$(label_reason "$reason")/g; s/{count}/$count/g; s/{time}/$ts/g")" ;;
+                *)
+                        body="【BlockadeIP】已封禁 $ip，原因：$(label_reason "$reason")" ;;
+        esac
+        printf '%s' "$body"
+}
+
+bark_send() {
+        local title="$1" body="$2" url enc_title enc_body
+        [ -n "$bark_server" ] || return 1
+        enc_title=$(printf '%s' "$title" | sed 's/ /%20/g; s/#/%23/g; s/?/%3F/g; s/&/%26/g')
+        enc_body=$(printf '%s' "$body" | sed 's/ /%20/g; s/#/%23/g; s/?/%3F/g; s/&/%26/g')
+        url="${bark_server%/}/$enc_title/$enc_body"
+        wget -q -T 5 -O /dev/null "$url" >/dev/null 2>&1
+}
+
 bark_push() {
         load_cfg
         [ "${bark_enabled:-0}" = "1" ] || return 0
         [ -n "$bark_server" ] || return 0
-        local ip="$1" count="$2" reason="$3" ts="$4" title body url enc_title enc_body
-        case "$bark_template" in
-                full) body="BlockadeIP 已封禁 $ip，原因：$(label_reason "$reason")，次数：$count，时间：$ts" ;;
-                custom) body="$bark_custom_template"; body="${body//\{ip\}/$ip}"; body="${body//\{reason\}/$(label_reason "$reason")}"; body="${body//\{count\}/$count}"; body="${body//\{time\}/$ts}" ;;
-                *) body="封禁 $ip：$(label_reason "$reason")" ;;
-        esac
-        title="BlockadeIP 安全拦截"
-        enc_title=$(printf '%s' "$title" | sed 's/ /%20/g')
-        enc_body=$(printf '%s' "$body" | sed 's/ /%20/g; s/#/%23/g')
-        url="${bark_server%/}/$enc_title/$enc_body"
-        wget -q -T 3 -O /dev/null "$url" >/dev/null 2>&1 || true
+        local ip="$1" count="$2" reason="$3" ts="$4" body
+        body="$(bark_template_body "$ip" "$count" "$reason" "$ts")"
+        bark_send "BlockadeIP 安全拦截" "$body" || true
 }
 
-cmd_init() { load_cfg; mkdirs; ensure_backend || exit 1; restore_banlist; ensure_public_index; }
+cmd_init() { ensure_config_defaults; load_cfg; mkdirs; ensure_backend || exit 1; restore_banlist; ensure_public_index; ensure_login_button; }
 
 cmd_add() {
         load_cfg; mkdirs; ensure_backend || exit 1
@@ -349,24 +384,36 @@ cmd_status_json() {
         banned="$(grep -cv '^\s*$' "$BANLIST" 2>/dev/null || echo 0)"
         repo="$(printf '%s' "$repo_url" | json_escape)"
         changelog_j="$(printf '%s' "$changelog" | json_escape)"
-        printf '{"enabled":%s,"running":%s,"autostart":%s,"backend":"%s","banned":%s,"threshold":%s,"window":%s,"public_page":%s,"public_path":"%s","banlist_path":"%s","version":"%s","repo_url":"%s","changelog":"%s"}\n' \
-                "${enabled:-1}" "$running" "$autostart" "$rt" "${banned:-0}" "${threshold:-20}" "${window:-300}" "${public_page:-1}" "$public_path" "$BANLIST" "$version" "$repo" "$changelog_j"
+        printf '{"enabled":%s,"running":%s,"autostart":%s,"backend":"%s","banned":%s,"threshold":%s,"window":%s,"public_page":%s,"public_path":"%s","banlist_path":"%s","version":"%s","repo_url":"%s","changelog":"%s","login_button":%s}\n' \
+                "${enabled:-1}" "$running" "$autostart" "$rt" "${banned:-0}" "${threshold:-20}" "${window:-300}" "${public_page:-1}" "$public_path" "$BANLIST" "$version" "$repo" "$changelog_j" "${login_button:-1}"
 }
 
 cmd_banlist_json() {
         load_cfg; mkdirs
+        sort -u "$BANLIST" -o "$BANLIST" 2>/dev/null || true
         printf '{"items":['
         awk -F '\t' '
-        FNR==NR { rec[$2]=$0; next }
-        NF>=1 && $1!="" {
-          ip=$1; split(rec[ip], a, "\t");
-          time=a[1]; count=a[3]; reason=a[4]; label=a[5];
-          if(time=="") time="-"; if(count=="") count=0; if(label=="") label="当前封禁中";
-          if(!first){first=1}else{printf ","}
-          gsub(/\\/,"\\\\",label); gsub(/\"/,"\\\"",label);
-          printf "{\"ip\":\"%s\",\"time\":\"%s\",\"count\":%d,\"reason\":\"%s\"}", ip, time, count+0, label;
-        }' "$RECORDS" "$BANLIST"
-        printf ']}\n'
+        FNR==NR { if($1!="") active[$1]=1; next }
+        NF>=2 && active[$2] && !seen[$2] {
+          arr[++n]=$0; seen[$2]=1
+        }
+        END{
+          first=1;
+          for(i=n;i>=1;i--){
+            split(arr[i], a, "\t"); ip=a[2]; time=a[1]; count=a[3]; label=a[5];
+            if(time=="") time="-"; if(count=="") count=0; if(label=="") label="当前封禁中";
+            gsub(/\\/,"\\\\",label); gsub(/\"/,"\\\"",label);
+            if(!first) printf ","; first=0;
+            printf "{\"ip\":\"%s\",\"time\":\"%s\",\"count\":%d,\"reason\":\"%s\"}", ip, time, count+0, label;
+          }
+          for(ip in active){
+            if(!seen[ip]){
+              if(!first) printf ","; first=0;
+              printf "{\"ip\":\"%s\",\"time\":\"-\",\"count\":0,\"reason\":\"当前封禁中\"}", ip;
+            }
+          }
+        }' "$BANLIST" "$RECORDS"
+        printf ']}'
 }
 
 cmd_logs_json() {
@@ -386,11 +433,12 @@ cmd_logs_json() {
 
 cmd_config_json() {
         load_cfg
-        printf '{"threshold":%s,"window":%s,"web_patterns":"%s","ssh_patterns":"%s","extra_patterns":"%s","bark_enabled":%s,"bark_server":"%s","bark_template":"%s","bark_custom_template":"%s"}\n' \
+        printf '{"threshold":%s,"window":%s,"web_patterns":"%s","ssh_patterns":"%s","extra_patterns":"%s","bark_enabled":%s,"bark_server":"%s","bark_template":"%s","bark_custom_template":"%s","login_button":%s}\n' \
                 "$threshold" "$window" \
                 "$(printf '%s' "$web_patterns" | json_escape)" "$(printf '%s' "$ssh_patterns" | json_escape)" "$(printf '%s' "$extra_patterns" | json_escape)" \
-                "${bark_enabled:-0}" "$(printf '%s' "$bark_server" | json_escape)" "$(printf '%s' "$bark_template" | json_escape)" "$(printf '%s' "$bark_custom_template" | json_escape)"
+                "${bark_enabled:-0}" "$(printf '%s' "$bark_server" | json_escape)" "$(printf '%s' "$bark_template" | json_escape)" "$(printf '%s' "$bark_custom_template" | json_escape)" "${login_button:-1}"
 }
+
 
 extract_ip() { echo "$1" | sed -nE 's/.*from ([0-9]{1,3}(\.[0-9]{1,3}){3}).*/\1/p' | head -n 1; }
 
@@ -425,7 +473,8 @@ cmd_daemon() {
         rm -f "$RUNTIME_FIFO"; mkfifo "$RUNTIME_FIFO" || exit 1
         logread -f > "$RUNTIME_FIFO" &
         local lp=$!
-        trap 'kill $lp 2>/dev/null; rm -f "$RUNTIME_FIFO"; exit 0' INT TERM EXIT
+        echo "$lp" > "$RUNTIME_LOGREAD_PID"
+        trap 'kill $lp 2>/dev/null; rm -f "$RUNTIME_FIFO" "$RUNTIME_LOGREAD_PID"; exit 0' INT TERM EXIT
         while read -r line < "$RUNTIME_FIFO"; do
                 is_fail_line "$line" || continue
                 ip="$(extract_ip "$line")"
@@ -442,8 +491,10 @@ cmd_daemon() {
 }
 
 cmd_stop() {
-        rm -f "$RUNTIME_FIFO"
-        pgrep -f 'logread -f' | xargs -r kill 2>/dev/null || true
+        if [ -f "$RUNTIME_LOGREAD_PID" ]; then
+                kill "$(cat "$RUNTIME_LOGREAD_PID")" 2>/dev/null || true
+        fi
+        rm -f "$RUNTIME_FIFO" "$RUNTIME_LOGREAD_PID"
 }
 
 cmd_reload() { load_cfg; mkdirs; ensure_backend; restore_banlist; update_public; echo reloaded; }
@@ -469,25 +520,84 @@ cmd_save_config() {
         uci -q set blockadeip.main.web_patterns="$web"
         uci -q set blockadeip.main.ssh_patterns="$ssh"
         uci -q set blockadeip.main.extra_patterns="$extra"
-        uci -q set blockadeip.bark.enabled="$be"
-        uci -q set blockadeip.bark.server="$bs"
-        uci -q set blockadeip.bark.template="$bt"
-        uci -q set blockadeip.bark.custom_template="$bc"
+        uci -q set blockadeip.push=bark
+        uci -q set blockadeip.push.enabled="$be"
+        uci -q set blockadeip.push.server="$bs"
+        uci -q set blockadeip.push.template="$bt"
+        uci -q set blockadeip.push.custom_template="$bc"
         uci commit blockadeip
         /etc/init.d/blockadeip restart >/dev/null 2>&1 || true
         echo saved
 }
 
 cmd_simulate() {
-        load_cfg
+        load_cfg; mkdirs
         local ip="$1" i
         valid_ip4 "$ip" || { echo "invalid ip" >&2; exit 1; }
         ip_in_cidr_whitelist "$ip" && { echo "protected ip or lan subnet: $ip" >&2; exit 2; }
         for i in $(seq 1 "${threshold:-20}"); do
                 logger -t uwsgi-luci "luci: failed login on / for root from $ip"
         done
-        echo "simulated $threshold failures for $ip"
+        cmd_add "$ip" "${threshold:-20}" web_bruteforce >/dev/null 2>&1 || true
+        echo "simulated ${threshold:-20} failures and banned $ip"
 }
+
+cmd_clear_logs() {
+        load_cfg; mkdirs
+        : > "$LOG_PATH"
+        echo "logs cleared"
+}
+
+cmd_bark_test() {
+        load_cfg
+        [ -n "$bark_server" ] || { echo "bark server is empty" >&2; exit 1; }
+        local ts body
+        ts="$(now_time)"
+        body="$(bark_template_body "203.0.113.200" "${threshold:-20}" test "$ts")"
+        bark_send "BlockadeIP 测试推送" "$body" && echo "bark test sent" || { echo "bark test failed" >&2; exit 1; }
+}
+
+login_button_targets() {
+        for f in /usr/lib/lua/luci/view/themes/argon/sysauth.htm /usr/lib/lua/luci/view/themes/*/sysauth.htm /usr/share/ucode/luci/template/themes/*/sysauth.ut; do
+                [ -f "$f" ] && echo "$f"
+        done | sort -u
+}
+
+cmd_login_button() {
+        load_cfg; mkdirs
+        local action="${1:-install}" f tmp block
+        if [ "$action" = "remove" ]; then
+                login_button_targets | while read -r f; do
+                        [ -f "$f" ] || continue
+                        grep -q 'BLOCKADEIP_PUBLIC_BUTTON_BEGIN' "$f" || continue
+                        awk '/BLOCKADEIP_PUBLIC_BUTTON_BEGIN/{skip=1; next} /BLOCKADEIP_PUBLIC_BUTTON_END/{skip=0; next} !skip{print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+                done
+                uci -q set blockadeip.main.login_button='0'; uci commit blockadeip
+                echo "login button removed"
+                return 0
+        fi
+        tmp="/tmp/blockadeip-login-button.$$"
+        cat > "$tmp" <<'EOBTN'
+<!-- BLOCKADEIP_PUBLIC_BUTTON_BEGIN -->
+<a href="/blockadeip/" target="_blank" style="display:block;margin:14px 0 0 0;padding:14px 0;width:100%;background:linear-gradient(90deg,#b00020,#ff2b3d);color:#fff;font-size:16px;text-align:center;border-radius:8px;text-decoration:none;font-weight:bold;letter-spacing:2px;box-shadow:0 0 18px rgba(255,43,61,.45);">🛡️ 爆 破 攻 击 拦 截 L o g s</a>
+<!-- BLOCKADEIP_PUBLIC_BUTTON_END -->
+EOBTN
+        login_button_targets | while read -r f; do
+                [ -f "$f" ] || continue
+                grep -q 'BLOCKADEIP_PUBLIC_BUTTON_BEGIN' "$f" && continue
+                [ -f "$f.blockadeip.bak" ] || cp -a "$f" "$f.blockadeip.bak" 2>/dev/null || true
+                awk 'FNR==NR{b=b $0 "\n"; next} /<\/form>/ && !done{print; printf "%s", b; done=1; next} {print} END{if(!done) printf "%s", b}' "$tmp" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+        done
+        rm -f "$tmp"
+        uci -q set blockadeip.main.login_button='1'; uci commit blockadeip
+        echo "login button installed"
+}
+
+ensure_login_button() {
+        load_cfg
+        [ "${login_button:-1}" = "1" ] && cmd_login_button install >/dev/null 2>&1 || true
+}
+
 
 case "$1" in
         init) cmd_init ;;
@@ -501,11 +611,14 @@ case "$1" in
         set-autostart) shift; cmd_set_autostart "$@" ;;
         save-config) shift; cmd_save_config "$@" ;;
         simulate) shift; cmd_simulate "$@" ;;
+        clear-logs) cmd_clear_logs ;;
+        bark-test) cmd_bark_test ;;
+        login-button) shift; cmd_login_button "$@" ;;
         status-json) cmd_status_json ;;
         banlist-json) cmd_banlist_json ;;
         logs-json) shift; cmd_logs_json "$@" ;;
         config-json) cmd_config_json ;;
         public) update_public ;;
         daemon) cmd_daemon ;;
-        *) echo "Usage: blockadeip {init|add|del|flush|stop|reload|set-config|set-enabled|set-autostart|save-config|simulate|status-json|banlist-json|logs-json|config-json|public|daemon}" >&2; exit 1 ;;
+        *) echo "Usage: blockadeip {init|add|del|flush|stop|reload|set-config|set-enabled|set-autostart|save-config|simulate|status-json|banlist-json|logs-json|config-json|clear-logs|bark-test|login-button|public|daemon}" >&2; exit 1 ;;
 esac
