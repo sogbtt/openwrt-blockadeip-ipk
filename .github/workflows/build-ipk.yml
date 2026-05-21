@@ -26,7 +26,13 @@ jobs:
           wget -O sdk.tar.zst https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
           mkdir sdk
           tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
-
+      
+      - name: Update OpenWrt feeds
+        working-directory: sdk
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
       - name: Copy packages into SDK
         run: |
           mkdir -p sdk/package/custom
