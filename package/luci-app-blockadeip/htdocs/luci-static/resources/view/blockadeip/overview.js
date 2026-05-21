@@ -108,7 +108,7 @@ return view.extend({
 
     var banRows = bans.length ? bans.map(function(x) {
       return E('tr', {}, [
-        cell(x.ip, 'bip-ip'), cell(x.time || '-'), cell(x.reason || '-'),
+        cell(x.ip, 'bip-ip'), cell(x.time || '-'), cell(x.label || x.reason || '-'),
         E('td', {}, E('button', { 'class': 'btn cbi-button cbi-button-remove', title: '从封禁列表、ipset 和持久化记录中移除此 IP', 'click': function(){ if (!confirm('确认移除 ' + x.ip + ' ?')) return; callDelete(x.ip).then(function(res){ notify(res); reloadHere(); }); } }, '移除'))
       ]);
     }) : [ E('tr', {}, E('td', { colspan: 4, 'class': 'bip-empty' }, '暂无封禁 IP')) ];

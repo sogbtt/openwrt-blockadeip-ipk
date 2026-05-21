@@ -11,8 +11,8 @@ LOCK_DIR="$STATE_DIR/lock"
 BANLIST="/etc/blockadeip/banlist"
 RECORDS="/etc/blockadeip/records.tsv"
 LOG_PATH="/etc/blockadeip/blockadeip.log"
-VERSION="1.4.1"
-CHANGELOG="V1.4.1: 修复Bark提示堆叠、Bark换行显示、已封禁列表为空、表格排版细节。V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
+VERSION="1.4.2"
+CHANGELOG="V1.4.2: 修复已封禁列表原因列显示英文、修复 banlist-json JSON 输出异常、登录页按钮严格按实测样式注入。V1.4.1: 修复Bark提示堆叠、Bark换行显示、已封禁列表为空、表格排版细节。V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
 REPO_URL="https://github.com/sogbtt/openwrt-blockadeip-ipk"
 
 mkdirs() {
@@ -391,36 +391,34 @@ cmd_banlist_json() {
         load_cfg; mkdirs
         sort -u "$BANLIST" -o "$BANLIST" 2>/dev/null || true
         printf '{"items":['
-        awk -F '	' '
-        FNR==NR {
-          if($1 != "") active[$1]=1;
-          next
-        }
-        NF>=2 && active[$2] && !seen[$2] {
-          arr[++n]=$0;
-          seen[$2]=1;
-          next
-        }
-        END{
-          first=1;
-          for(i=n;i>=1;i--){
-            split(arr[i], a, "	");
-            ip=a[2]; time=a[1]; count=a[3]; label=a[5];
-            if(time=="") time="-";
-            if(count=="") count=0;
-            if(label=="") label="当前封禁中";
-            gsub(/\/,"\\",label); gsub(/"/,"\"",label);
-            if(!first) printf ","; first=0;
-            printf "{"ip":"%s","time":"%s","count":%d,"reason":"%s"}", ip, time, count+0, label;
-          }
-          for(ip in active){
-            if(!seen[ip]){
-              if(!first) printf ","; first=0;
-              printf "{"ip":"%s","time":"-","count":0,"reason":"当前封禁中"}", ip;
-            }
-          }
-        }' "$BANLIST" "$RECORDS"
-        printf ']}'
+        local first=1 ip rec time count reason label esc_ip esc_time esc_reason esc_label
+        [ -f "$BANLIST" ] || { printf ']}\n'; return; }
+        while read -r ip; do
+                [ -n "$ip" ] || continue
+                case "$ip" in \#*) continue ;; esac
+                time="-"; count="0"; reason="current_ban"; label="当前封禁中"
+                if [ -f "$RECORDS" ]; then
+                        rec="$(awk -F '\t' -v ip="$ip" '$2 == ip { line=$0 } END { print line }' "$RECORDS" 2>/dev/null)"
+                        if [ -n "$rec" ]; then
+                                time="$(printf '%s\n' "$rec" | awk -F '\t' '{print $1}')"
+                                count="$(printf '%s\n' "$rec" | awk -F '\t' '{print $3}')"
+                                reason="$(printf '%s\n' "$rec" | awk -F '\t' '{print $4}')"
+                                label="$(printf '%s\n' "$rec" | awk -F '\t' '{print $5}')"
+                                [ -n "$time" ] || time="-"
+                                [ -n "$count" ] || count="0"
+                                [ -n "$reason" ] || reason="current_ban"
+                                [ -n "$label" ] || label="当前封禁中"
+                        fi
+                fi
+                esc_ip="$(printf '%s' "$ip" | json_escape)"
+                esc_time="$(printf '%s' "$time" | json_escape)"
+                esc_reason="$(printf '%s' "$reason" | json_escape)"
+                esc_label="$(printf '%s' "$label" | json_escape)"
+                [ "$first" = "1" ] || printf ','
+                first=0
+                printf '{"ip":"%s","time":"%s","count":%s,"reason":"%s","label":"%s"}' "$esc_ip" "$esc_time" "${count:-0}" "$esc_reason" "$esc_label"
+        done < "$BANLIST"
+        printf ']}\n'
 }
 cmd_logs_json() {
         load_cfg; mkdirs
@@ -585,14 +583,14 @@ cmd_login_button() {
         tmp="/tmp/blockadeip-login-button.$$"
         cat > "$tmp" <<'EOBTN'
 <!-- BLOCKADEIP_PUBLIC_BUTTON_BEGIN -->
-<a href="/blockadeip/" target="_blank" style="display:block;margin:14px 0 0 0;padding:14px 0;width:100%;background:linear-gradient(90deg,#b00020,#ff2b3d);color:#fff;font-size:16px;text-align:center;border-radius:8px;text-decoration:none;font-weight:bold;letter-spacing:2px;box-shadow:0 0 18px rgba(255,43,61,.45);">🛡️ 爆 破 攻 击 拦 截 L o g s</a>
+<a href="/blockadeip/" target="_blank" style="display:block; margin-top:-80px; padding:15px 0; width:100%; background-color:#ff7e00; color:#fff; font-size:16px; text-align:center; border-radius:8px; text-decoration:none; font-weight:bold;"> 🛡️ 爆破拦截记录 </a>
 <!-- BLOCKADEIP_PUBLIC_BUTTON_END -->
 EOBTN
         login_button_targets | while read -r f; do
                 [ -f "$f" ] || continue
                 grep -q 'BLOCKADEIP_PUBLIC_BUTTON_BEGIN' "$f" && continue
                 [ -f "$f.blockadeip.bak" ] || cp -a "$f" "$f.blockadeip.bak" 2>/dev/null || true
-                awk 'FNR==NR{b=b $0 "\n"; next} /<\/form>/ && !done{print; printf "%s", b; done=1; next} {print} END{if(!done) printf "%s", b}' "$tmp" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+                awk 'FNR==NR{b=b $0 "\n"; next} /<input type="submit"/ && /cbi-button-apply/ && !done{print; printf "%s", b; done=1; next} {print} END{if(!done) printf "%s", b}' "$tmp" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
         done
         rm -f "$tmp"
         uci -q set blockadeip.main.login_button='1'; uci commit blockadeip
