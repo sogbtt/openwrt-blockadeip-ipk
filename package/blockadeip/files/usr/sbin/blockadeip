@@ -1,0 +1,318 @@
+#!/bin/sh
+
+. /lib/functions.sh
+
+CONFIG="blockadeip"
+BASE_DIR="/etc/blockadeip"
+BANLIST="$BASE_DIR/banlist"
+STATE_DIR="/tmp/blockadeip"
+ATTEMPT_DIR="$STATE_DIR/attempts"
+RUNTIME_BACKEND="$STATE_DIR/backend"
+DEFAULT_LOG="$STATE_DIR/blockadeip.log"
+DEFAULT_PUBLIC="/www/blockadeip"
+
+load_cfg() {
+	config_load "$CONFIG"
+	config_get enabled main enabled 1
+	config_get backend main backend auto
+	config_get set_name main set_name blockadeip
+	config_get chain_name main chain_name BLOCKADEIP
+	config_get threshold main threshold 20
+	config_get window main window 300
+	config_get ban_time main ban_time 0
+	config_get public_page main public_page 1
+	config_get public_limit main public_limit 100
+	config_get log_path main log_path "$DEFAULT_LOG"
+	config_get public_path main public_path "$DEFAULT_PUBLIC"
+}
+
+mkdirs() {
+	mkdir -p "$BASE_DIR" "$STATE_DIR" "$ATTEMPT_DIR"
+	[ -f "$BANLIST" ] || touch "$BANLIST"
+	mkdir -p "$(dirname "$log_path")"
+	[ -n "$public_path" ] && mkdir -p "$public_path"
+}
+
+now() {
+	date '+%Y-%m-%d %H:%M:%S'
+}
+
+valid_ip4() {
+	echo "$1" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || return 1
+	awk -v ip="$1" 'BEGIN{n=split(ip,a,"."); for(i=1;i<=n;i++){ if(a[i] < 0 || a[i] > 255) exit 1 } exit 0 }'
+}
+
+ip_in_cidr_whitelist() {
+	# Simple private/self whitelist is handled before ban. CIDR math is intentionally conservative in V1.
+	case "$1" in
+		127.*|10.*|192.168.*) return 0 ;;
+		172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) return 0 ;;
+	esac
+	return 1
+}
+
+is_banned_file() {
+	grep -qx "$1" "$BANLIST" 2>/dev/null
+}
+
+log_event() {
+	local action="$1" ip="$2" count="$3" reason="$4"
+	mkdir -p "$(dirname "$log_path")"
+	echo "$(now) $action $ip count=${count:-0} reason=${reason:-manual}" >> "$log_path"
+}
+
+mask_ip() {
+	echo "$1" | awk -F. '{ if (NF == 4) print $1"."$2"."$3".*"; else print $0 }'
+}
+
+update_public() {
+	[ "$public_page" = "1" ] || return 0
+	mkdir -p "$public_path"
+	local data="$public_path/data.json"
+	local tmp="$data.tmp"
+	local total banned updated
+	banned="$(grep -Ev '^$|^#' "$BANLIST" 2>/dev/null | wc -l | tr -d ' ')"
+	updated="$(now)"
+	{
+		echo '{'
+		echo "  \"total_banned\": ${banned:-0},"
+		echo "  \"updated_at\": \"$updated\","
+		echo '  "items": ['
+		if [ -f "$log_path" ]; then
+			tail -n "${public_limit:-100}" "$log_path" | awk '
+			function mask(ip, a){ split(ip,a,"."); if(length(a[1])>0&&length(a[2])>0&&length(a[3])>0) return a[1]"."a[2]"."a[3]".*"; return ip }
+			BEGIN{first=1}
+			{
+			  ts=$1" "$2; action=$3; ip=$4; count="0"; reason="";
+			  for(i=5;i<=NF;i++){
+			    if($i ~ /^count=/){ sub(/^count=/,"",$i); count=$i }
+			    if($i ~ /^reason=/){ sub(/^reason=/,"",$i); reason=$i }
+			  }
+			  if(ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/){
+			    if(!first) printf ",\n";
+			    first=0;
+			    printf "    {\"time\":\"%s\",\"action\":\"%s\",\"ip\":\"%s\",\"count\":%d,\"reason\":\"%s\"}", ts, action, mask(ip), count, reason;
+			  }
+			}
+			END{ if(!first) printf "\n" }'
+		fi
+		echo '  ]'
+		echo '}'
+	} > "$tmp"
+	mv "$tmp" "$data"
+}
+
+ensure_public_index() {
+	[ "$public_page" = "1" ] || return 0
+	mkdir -p "$public_path"
+	[ -f "$public_path/index.html" ] || cp /www/blockadeip/index.html "$public_path/index.html" 2>/dev/null || true
+	update_public
+}
+
+setup_ipset_backend() {
+	ipset create "$set_name" hash:ip family inet -exist >/dev/null 2>&1 || return 1
+	iptables -t raw -C PREROUTING -m set --match-set "$set_name" src -j DROP >/dev/null 2>&1 && return 0
+	iptables -t raw -I PREROUTING 1 -m set --match-set "$set_name" src -j DROP >/dev/null 2>&1 || return 1
+	return 0
+}
+
+setup_chain_backend() {
+	iptables -t raw -N "$chain_name" >/dev/null 2>&1 || true
+	iptables -t raw -C PREROUTING -j "$chain_name" >/dev/null 2>&1 || iptables -t raw -I PREROUTING 1 -j "$chain_name" >/dev/null 2>&1 || return 1
+	return 0
+}
+
+ensure_backend() {
+	local selected="chain"
+	case "$backend" in
+		ipset)
+			setup_ipset_backend && selected="ipset" || selected="chain"
+			[ "$selected" = "ipset" ] || setup_chain_backend || return 1
+			;;
+		chain)
+			setup_chain_backend || return 1
+			selected="chain"
+			;;
+		*)
+			if setup_ipset_backend; then selected="ipset"; else setup_chain_backend || return 1; selected="chain"; fi
+			;;
+	esac
+	echo "$selected" > "$RUNTIME_BACKEND"
+	return 0
+}
+
+restore_banlist() {
+	local rt ip
+	rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"
+	grep -Ev '^$|^#' "$BANLIST" 2>/dev/null | while read -r ip; do
+		valid_ip4 "$ip" || continue
+		case "$rt" in
+			ipset) ipset add "$set_name" "$ip" -exist >/dev/null 2>&1 ;;
+			*) iptables -t raw -C "$chain_name" -s "$ip" -j DROP >/dev/null 2>&1 || iptables -t raw -A "$chain_name" -s "$ip" -j DROP >/dev/null 2>&1 ;;
+		esac
+	done
+}
+
+cmd_init() {
+	load_cfg; mkdirs; ensure_backend || exit 1; restore_banlist; ensure_public_index
+}
+
+cmd_add() {
+	load_cfg; mkdirs; ensure_backend || exit 1
+	local ip="$1" count="$2" reason="$3" rt
+	valid_ip4 "$ip" || { echo "invalid ip" >&2; exit 1; }
+	ip_in_cidr_whitelist "$ip" && { echo "refuse to ban whitelist/private ip" >&2; exit 1; }
+	rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"
+	case "$rt" in
+		ipset) ipset add "$set_name" "$ip" -exist >/dev/null 2>&1 ;;
+		*) iptables -t raw -C "$chain_name" -s "$ip" -j DROP >/dev/null 2>&1 || iptables -t raw -A "$chain_name" -s "$ip" -j DROP >/dev/null 2>&1 ;;
+	esac
+	is_banned_file "$ip" || echo "$ip" >> "$BANLIST"
+	log_event "ban" "$ip" "${count:-0}" "${reason:-manual}"
+	update_public
+	echo "banned $ip"
+}
+
+cmd_del() {
+	load_cfg; mkdirs
+	local ip="$1" rt tmp
+	valid_ip4 "$ip" || { echo "invalid ip" >&2; exit 1; }
+	rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"
+	case "$rt" in
+		ipset) ipset del "$set_name" "$ip" >/dev/null 2>&1 || true ;;
+		*) while iptables -t raw -C "$chain_name" -s "$ip" -j DROP >/dev/null 2>&1; do iptables -t raw -D "$chain_name" -s "$ip" -j DROP >/dev/null 2>&1 || break; done ;;
+	esac
+	tmp="$BANLIST.tmp"
+	grep -vx "$ip" "$BANLIST" > "$tmp" 2>/dev/null || true
+	mv "$tmp" "$BANLIST"
+	log_event "unban" "$ip" 0 "manual"
+	update_public
+	echo "unbanned $ip"
+}
+
+cmd_flush() {
+	load_cfg; mkdirs
+	local rt
+	rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"
+	case "$rt" in
+		ipset) ipset flush "$set_name" >/dev/null 2>&1 || true ;;
+		*) iptables -t raw -F "$chain_name" >/dev/null 2>&1 || true ;;
+	esac
+	: > "$BANLIST"
+	log_event "flush" "0.0.0.0" 0 "manual"
+	update_public
+	echo "flushed"
+}
+
+cmd_stop() {
+	load_cfg
+	iptables -t raw -D PREROUTING -m set --match-set "$set_name" src -j DROP >/dev/null 2>&1 || true
+	iptables -t raw -D PREROUTING -j "$chain_name" >/dev/null 2>&1 || true
+	iptables -t raw -F "$chain_name" >/dev/null 2>&1 || true
+	iptables -t raw -X "$chain_name" >/dev/null 2>&1 || true
+}
+
+json_escape() {
+	sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+cmd_status_json() {
+	load_cfg; mkdirs
+	local rt banned running rule
+	rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"
+	[ -n "$rt" ] || rt="unknown"
+	banned="$(grep -Ev '^$|^#' "$BANLIST" 2>/dev/null | wc -l | tr -d ' ')"
+	running=0
+	if pgrep -f '/usr/sbin/blockadeip daemon' >/dev/null 2>&1; then running=1; fi
+	printf '{"enabled":%s,"running":%s,"backend":"%s","banned":%s,"threshold":%s,"window":%s,"public_page":%s,"public_path":"%s"}\n' \
+		"${enabled:-1}" "$running" "$rt" "${banned:-0}" "${threshold:-20}" "${window:-300}" "${public_page:-1}" "$public_path"
+}
+
+cmd_banlist_json() {
+	load_cfg; mkdirs
+	printf '{"items":['
+	local first=1 ip
+	while read -r ip; do
+		valid_ip4 "$ip" || continue
+		[ "$first" = "1" ] || printf ','
+		first=0
+		printf '{"ip":"%s"}' "$ip"
+	done < "$BANLIST"
+	printf ']}\n'
+}
+
+cmd_logs_json() {
+	load_cfg; mkdirs
+	local limit="${1:-100}"
+	printf '{"items":['
+	[ -f "$log_path" ] && tail -n "$limit" "$log_path" | awk '
+		BEGIN{first=1}
+		{
+		  ts=$1" "$2; action=$3; ip=$4; count="0"; reason="";
+		  for(i=5;i<=NF;i++){
+		    if($i ~ /^count=/){ sub(/^count=/,"",$i); count=$i }
+		    if($i ~ /^reason=/){ sub(/^reason=/,"",$i); reason=$i }
+		  }
+		  if(ip != ""){
+		    if(!first) printf ",";
+		    first=0;
+		    printf "{\"time\":\"%s\",\"action\":\"%s\",\"ip\":\"%s\",\"count\":%d,\"reason\":\"%s\"}", ts, action, ip, count, reason;
+		  }
+		}'
+	printf ']}\n'
+}
+
+extract_ip() {
+	echo "$1" | sed -nE 's/.*from ([0-9]{1,3}(\.[0-9]{1,3}){3}).*/\1/p' | head -n 1
+}
+
+is_fail_line() {
+	echo "$1" | grep -Eiq 'luci: failed login|bad password|Failed password|invalid user|Exit before auth|authentication failure|Login failed'
+}
+
+record_attempt() {
+	local ip="$1" now_s file tmp count
+	now_s="$(date +%s)"
+	file="$ATTEMPT_DIR/$ip"
+	tmp="$file.tmp"
+	[ -f "$file" ] || touch "$file"
+	awk -v now="$now_s" -v win="${window:-300}" '{ if ($1 >= now - win) print $1 }' "$file" > "$tmp" 2>/dev/null || true
+	echo "$now_s" >> "$tmp"
+	mv "$tmp" "$file"
+	count="$(wc -l < "$file" | tr -d ' ')"
+	echo "$count"
+}
+
+cmd_daemon() {
+	load_cfg; mkdirs; ensure_backend || exit 1; restore_banlist; ensure_public_index
+	[ "$enabled" = "1" ] || exit 0
+	logread -f | while read -r line; do
+		is_fail_line "$line" || continue
+		ip="$(extract_ip "$line")"
+		valid_ip4 "$ip" || continue
+		ip_in_cidr_whitelist "$ip" && continue
+		is_banned_file "$ip" && continue
+		count="$(record_attempt "$ip")"
+		if [ "${count:-0}" -ge "${threshold:-20}" ]; then
+			cmd_add "$ip" "$count" "auto"
+			rm -f "$ATTEMPT_DIR/$ip"
+		fi
+	done
+}
+
+case "$1" in
+	init) cmd_init ;;
+	add) shift; cmd_add "$@" ;;
+	del|delete|unban) shift; cmd_del "$@" ;;
+	flush) cmd_flush ;;
+	stop) cmd_stop ;;
+	reload) cmd_init ;;
+	status-json) cmd_status_json ;;
+	banlist-json) cmd_banlist_json ;;
+	logs-json) shift; cmd_logs_json "$@" ;;
+	public) load_cfg; mkdirs; update_public ;;
+	daemon) cmd_daemon ;;
+	*)
+		echo "Usage: blockadeip {init|add IP [count] [reason]|del IP|flush|stop|reload|status-json|banlist-json|logs-json [limit]|public|daemon}"
+		;;
+esac

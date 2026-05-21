@@ -1,0 +1,13 @@
+{
+  "admin/services/blockadeip": {
+    "title": "SSH安全卫士",
+    "order": 80,
+    "action": {
+      "type": "view",
+      "path": "blockadeip/overview"
+    },
+    "depends": {
+      "acl": [ "luci-app-blockadeip" ]
+    }
+  }
+}

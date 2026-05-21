@@ -1,0 +1,68 @@
+#!/bin/sh
+
+read_input() {
+	cat > /tmp/blockadeip-rpc.$$
+}
+
+get_json_value() {
+	jsonfilter -i /tmp/blockadeip-rpc.$$ -e "@.$1" 2>/dev/null
+}
+
+case "$1" in
+	list)
+		cat <<'JSON'
+{
+  "status": {},
+  "banlist": {},
+  "add": { "ip": "string" },
+  "delete": { "ip": "string" },
+  "flush": {},
+  "logs": { "limit": "integer" },
+  "reload": {},
+  "public": {}
+}
+JSON
+		;;
+	status)
+		/usr/sbin/blockadeip status-json
+		;;
+	banlist)
+		/usr/sbin/blockadeip banlist-json
+		;;
+	add)
+		read_input
+		ip="$(get_json_value ip)"
+		rm -f /tmp/blockadeip-rpc.$$
+		out="$(/usr/sbin/blockadeip add "$ip" 0 luci 2>&1)"; rc=$?
+		[ $rc -eq 0 ] && printf '{"ok":true,"message":"%s"}\n' "$out" || printf '{"ok":false,"message":"%s"}\n' "$out"
+		;;
+	delete)
+		read_input
+		ip="$(get_json_value ip)"
+		rm -f /tmp/blockadeip-rpc.$$
+		out="$(/usr/sbin/blockadeip del "$ip" 2>&1)"; rc=$?
+		[ $rc -eq 0 ] && printf '{"ok":true,"message":"%s"}\n' "$out" || printf '{"ok":false,"message":"%s"}\n' "$out"
+		;;
+	flush)
+		out="$(/usr/sbin/blockadeip flush 2>&1)"; rc=$?
+		[ $rc -eq 0 ] && printf '{"ok":true,"message":"%s"}\n' "$out" || printf '{"ok":false,"message":"%s"}\n' "$out"
+		;;
+	logs)
+		read_input
+		limit="$(get_json_value limit)"
+		rm -f /tmp/blockadeip-rpc.$$
+		[ -n "$limit" ] || limit=100
+		/usr/sbin/blockadeip logs-json "$limit"
+		;;
+	reload)
+		/etc/init.d/blockadeip reload >/dev/null 2>&1
+		printf '{"ok":true}\n'
+		;;
+	public)
+		/usr/sbin/blockadeip public >/dev/null 2>&1
+		printf '{"ok":true}\n'
+		;;
+	*)
+		printf '{"ok":false,"message":"unknown method"}\n'
+		;;
+esac

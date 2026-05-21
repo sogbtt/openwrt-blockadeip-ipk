@@ -1,0 +1,17 @@
+{
+  "luci-app-blockadeip": {
+    "description": "Grant access to BlockadeIP",
+    "read": {
+      "ubus": {
+        "blockadeip": [ "status", "banlist", "logs" ]
+      },
+      "uci": [ "blockadeip" ]
+    },
+    "write": {
+      "ubus": {
+        "blockadeip": [ "add", "delete", "flush", "reload", "public" ]
+      },
+      "uci": [ "blockadeip" ]
+    }
+  }
+}
