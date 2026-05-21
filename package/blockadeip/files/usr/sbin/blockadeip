@@ -11,8 +11,8 @@ LOCK_DIR="$STATE_DIR/lock"
 BANLIST="/etc/blockadeip/banlist"
 RECORDS="/etc/blockadeip/records.tsv"
 LOG_PATH="/etc/blockadeip/blockadeip.log"
-VERSION="1.4.0"
-CHANGELOG="V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
+VERSION="1.4.1"
+CHANGELOG="V1.4.1: 修复Bark提示堆叠、Bark换行显示、已封禁列表为空、表格排版细节。V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
 REPO_URL="https://github.com/sogbtt/openwrt-blockadeip-ipk"
 
 mkdirs() {
@@ -274,7 +274,7 @@ bark_template_body() {
         local ip="$1" count="$2" reason="$3" ts="$4" body
         case "$bark_template" in
                 full)
-                        body="【BlockadeIP安全拦截】\n来源IP：$ip\n封禁原因：$(label_reason "$reason")\n触发次数：$count\n封禁时间：$ts\n处理结果：已加入早期入站封禁列表" ;;
+                        body="【BlockadeIP安全拦截】来源IP：$ip；封禁原因：$(label_reason "$reason")；触发次数：$count；封禁时间：$ts；处理结果：已加入早期入站封禁列表" ;;
                 ops)
                         body="BlockadeIP提醒：$ip 已被封禁；原因：$(label_reason "$reason")；次数：$count；时间：$ts" ;;
                 custom)
@@ -285,7 +285,6 @@ bark_template_body() {
         esac
         printf '%s' "$body"
 }
-
 bark_send() {
         local title="$1" body="$2" url enc_title enc_body
         [ -n "$bark_server" ] || return 1
@@ -392,30 +391,37 @@ cmd_banlist_json() {
         load_cfg; mkdirs
         sort -u "$BANLIST" -o "$BANLIST" 2>/dev/null || true
         printf '{"items":['
-        awk -F '\t' '
-        FNR==NR { if($1!="") active[$1]=1; next }
+        awk -F '	' '
+        FNR==NR {
+          if($1 != "") active[$1]=1;
+          next
+        }
         NF>=2 && active[$2] && !seen[$2] {
-          arr[++n]=$0; seen[$2]=1
+          arr[++n]=$0;
+          seen[$2]=1;
+          next
         }
         END{
           first=1;
           for(i=n;i>=1;i--){
-            split(arr[i], a, "\t"); ip=a[2]; time=a[1]; count=a[3]; label=a[5];
-            if(time=="") time="-"; if(count=="") count=0; if(label=="") label="当前封禁中";
-            gsub(/\\/,"\\\\",label); gsub(/\"/,"\\\"",label);
+            split(arr[i], a, "	");
+            ip=a[2]; time=a[1]; count=a[3]; label=a[5];
+            if(time=="") time="-";
+            if(count=="") count=0;
+            if(label=="") label="当前封禁中";
+            gsub(/\/,"\\",label); gsub(/"/,"\"",label);
             if(!first) printf ","; first=0;
-            printf "{\"ip\":\"%s\",\"time\":\"%s\",\"count\":%d,\"reason\":\"%s\"}", ip, time, count+0, label;
+            printf "{"ip":"%s","time":"%s","count":%d,"reason":"%s"}", ip, time, count+0, label;
           }
           for(ip in active){
             if(!seen[ip]){
               if(!first) printf ","; first=0;
-              printf "{\"ip\":\"%s\",\"time\":\"-\",\"count\":0,\"reason\":\"当前封禁中\"}", ip;
+              printf "{"ip":"%s","time":"-","count":0,"reason":"当前封禁中"}", ip;
             }
           }
         }' "$BANLIST" "$RECORDS"
         printf ']}'
 }
-
 cmd_logs_json() {
         load_cfg; mkdirs
         local limit="${1:-100}"

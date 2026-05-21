@@ -1,4 +1,25 @@
-# OpenWrt-BlockadeIP IPK
+# OpenWrt-BlockadeIP
+
+## 快速判断是否适合安装
+
+在 OpenWrt/ImmortalWrt 设备 SSH 中执行：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sogbtt/openwrt-blockadeip-ipk/refs/heads/main/check-env.sh | sh
+```
+
+该检测脚本只做环境兼容性检查，不安装插件，不修改 BlockadeIP 配置，不持久化防火墙规则。
+
+## 适用环境说明
+
+推荐环境：OpenWrt / ImmortalWrt 24.10.x，已验证 OpenWrt 24.10.0、Kernel 6.12.18、x86/64。项目主体为 Shell + LuCI JS + HTML，IPK 为架构无关包，预计可用于 rockchip/armv8、armsr/armv8 等平台。
+
+核心依赖：iptables raw 表、ipset、logread/logger、rpcd、luci-base、jsonfilter。对于 firewall4/nftables 系统，只要 `iptables v1.8.x (nf_tables)` 兼容层下 raw PREROUTING + ipset 可用，本插件预计可用。
+
+不适用或需谨慎：无 iptables raw 表、无 ipset/kmod-ipt-ipset、极简固件缺少 rpcd/LuCI/logread、非 OpenWrt 系统、仅 nftables 且完全不提供 iptables 兼容命令的环境。
+
+> BlockadeIP 不是 firewall4/banIP 的替代品，而是面向端口转发、混合防火墙环境的 raw PREROUTING 早期入站拦截插件。
+
 
 BlockadeIP 是一个面向 OpenWrt / ImmortalWrt 的早期入站封禁插件。它的核心目标不是替代 firewall4 / banIP，而是在复杂的 iptables-nft / nftables / fw4 混合环境下，继续保留经过实测有效的 **iptables raw PREROUTING + ipset** 拦截链路。
 

@@ -21,7 +21,16 @@ var callBarkTest = rpc.declare({ object: 'blockadeip', method: 'bark_test', expe
 var callLoginButton = rpc.declare({ object: 'blockadeip', method: 'login_button', params: [ 'action' ], expect: { '': {} } });
 
 function notify(res) {
-  ui.addNotification(null, E('p', {}, (res && res.message) ? res.message : '操作完成'), (res && res.ok === false) ? 'danger' : 'info');
+  var old = document.getElementById('bip-toast');
+  if (old) old.remove();
+  var msg = (res && res.message) ? res.message : '操作完成';
+  var danger = !!(res && res.ok === false);
+  var box = E('div', {
+    id: 'bip-toast',
+    style: 'position:fixed;top:18px;right:18px;z-index:99999;max-width:520px;padding:12px 18px;border-radius:8px;color:#fff;background:' + (danger ? '#d32f2f' : '#2e7d32') + ';box-shadow:0 6px 20px rgba(0,0,0,.25);font-weight:700;'
+  }, msg);
+  document.body.appendChild(box);
+  setTimeout(function(){ var el = document.getElementById('bip-toast'); if (el) el.remove(); }, 2600);
 }
 function isStep10(v) { return /^\d+$/.test(String(v)) && Number(v) > 0 && Number(v) % 10 === 0; }
 function cell(v, cls) { return E('td', cls ? { 'class': cls } : {}, v == null ? '' : String(v)); }
@@ -43,7 +52,7 @@ function tabButton(name, id) {
 }
 function templatePreview(tpl, custom) {
   var ip = '203.0.113.200', reason = '模拟测试封禁', count = '20', time = '2026-05-21 23:59:59';
-  if (tpl === 'full') return '【BlockadeIP安全拦截】\n来源IP：' + ip + '\n封禁原因：' + reason + '\n触发次数：' + count + '\n封禁时间：' + time + '\n处理结果：已加入早期入站封禁列表';
+  if (tpl === 'full') return '【BlockadeIP安全拦截】来源IP：' + ip + '；封禁原因：' + reason + '；触发次数：' + count + '；封禁时间：' + time + '；处理结果：已加入早期入站封禁列表';
   if (tpl === 'ops') return 'BlockadeIP提醒：' + ip + ' 已被封禁；原因：' + reason + '；次数：' + count + '；时间：' + time;
   if (tpl === 'custom') return (custom || '').replace(/\{ip\}/g, ip).replace(/\{reason\}/g, reason).replace(/\{count\}/g, count).replace(/\{time\}/g, time);
   return '【BlockadeIP】已封禁 ' + ip + '，原因：' + reason;
@@ -109,7 +118,7 @@ return view.extend({
     }) : [ E('tr', {}, E('td', { colspan: 5, 'class': 'bip-empty' }, '暂无日志')) ];
 
     var css = E('style', {}, `
-      .bip-section .table{width:100%;table-layout:fixed;border-collapse:collapse}.bip-section th,.bip-section td{vertical-align:middle;text-align:left;padding:10px 12px;word-break:break-all}.bip-k{width:180px;font-weight:700}.bip-v{word-break:break-all}.bip-scroll{max-height:430px;overflow-y:auto;border:1px solid #ddd;border-radius:6px}.bip-scroll table{margin:0}.bip-ip{font-family:monospace;font-weight:700}.bip-empty{text-align:center;color:#888;padding:24px}.bip-preview{background:#f5f5f5;color:#666;border:1px solid #ddd;border-radius:6px;padding:10px;white-space:pre-wrap;line-height:1.6}.bip-active{font-weight:700;box-shadow:inset 0 -2px 0 #1976d2}.bip-tab-button{margin:0 8px 8px 0}.bip-actions button{margin-right:6px;margin-bottom:6px}.bip-note{color:#666;margin:6px 0 12px 0;line-height:1.6}
+      .bip-section .table{width:100%;table-layout:fixed;border-collapse:collapse}.bip-section th,.bip-section td{vertical-align:middle;text-align:left;padding:10px 12px;word-break:break-all}.bip-table th:nth-child(1),.bip-table td:nth-child(1){width:22%}.bip-table th:nth-child(2),.bip-table td:nth-child(2){width:24%}.bip-table th:nth-child(3),.bip-table td:nth-child(3){width:34%}.bip-table th:nth-child(4),.bip-table td:nth-child(4){width:20%;text-align:center}.bip-k{width:180px;font-weight:700}.bip-v{word-break:break-all}.bip-scroll{max-height:430px;overflow-y:auto;border:1px solid #ddd;border-radius:6px}.bip-scroll table{margin:0}.bip-ip{font-family:monospace;font-weight:700}.bip-empty{text-align:center;color:#888;padding:24px}.bip-preview{background:#f5f5f5;color:#666;border:1px solid #ddd;border-radius:6px;padding:10px;white-space:pre-wrap;line-height:1.6}.bip-active{font-weight:700;box-shadow:inset 0 -2px 0 #1976d2}.bip-tab-button{margin:0 8px 8px 0}.bip-actions button{margin-right:6px;margin-bottom:6px}.bip-note{color:#666;margin:6px 0 12px 0;line-height:1.6}
     `);
 
     var overview = E('div', { id: 'tab-overview', 'class': 'bip-tab' }, [
