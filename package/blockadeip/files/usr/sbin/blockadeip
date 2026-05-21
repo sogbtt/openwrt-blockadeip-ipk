@@ -201,8 +201,10 @@ cmd_add() {
 
 cmd_del() {
 	load_cfg; mkdirs
-	local ip="$1" rt tmp
+	local ip="$1" rt tmp existed
 	valid_ip4 "$ip" || { echo "invalid ip" >&2; exit 1; }
+	existed=0
+	is_banned_file "$ip" && existed=1
 	rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"
 	case "$rt" in
 		ipset) ipset del "$set_name" "$ip" >/dev/null 2>&1 || true ;;
@@ -211,9 +213,14 @@ cmd_del() {
 	tmp="$BANLIST.tmp"
 	grep -vx "$ip" "$BANLIST" > "$tmp" 2>/dev/null || true
 	mv "$tmp" "$BANLIST"
-	log_event "unban" "$ip" 0 "manual_luci"
-	update_public
-	echo "unbanned $ip"
+	if [ "$existed" = "1" ]; then
+		log_event "unban" "$ip" 0 "manual_luci"
+		update_public
+		echo "unbanned $ip"
+	else
+		update_public
+		echo "not banned $ip"
+	fi
 }
 
 cmd_flush() {
@@ -245,7 +252,11 @@ cmd_set_config() {
 	uci -q set blockadeip.main.threshold="$new_threshold"
 	uci -q set blockadeip.main.window="$new_window"
 	uci -q commit blockadeip
-	cmd_init
+	if pgrep -f '/usr/sbin/blockadeip daemon' >/dev/null 2>&1; then
+		/etc/init.d/blockadeip restart >/dev/null 2>&1 || cmd_init
+	else
+		cmd_init
+	fi
 	echo "config updated"
 }
 
@@ -344,7 +355,14 @@ record_attempt() {
 cmd_daemon() {
 	load_cfg; mkdirs; ensure_backend || exit 1; restore_banlist; ensure_public_index
 	[ "$enabled" = "1" ] || exit 0
-	logread -f | while read -r line; do
+	local fifo logpid
+	fifo="$STATE_DIR/logread.$$.fifo"
+	rm -f "$fifo"
+	mkfifo "$fifo" || exit 1
+	trap 'kill "$logpid" 2>/dev/null; rm -f "$fifo"; exit 0' INT TERM EXIT
+	logread -f > "$fifo" &
+	logpid="$!"
+	while read -r line; do
 		is_fail_line "$line" || continue
 		ip="$(extract_ip "$line")"
 		valid_ip4 "$ip" || continue
@@ -356,7 +374,7 @@ cmd_daemon() {
 			cmd_add "$ip" "$count" "$reason"
 			rm -f "$ATTEMPT_DIR/$ip"
 		fi
-	done
+	done < "$fifo"
 }
 
 case "$1" in
