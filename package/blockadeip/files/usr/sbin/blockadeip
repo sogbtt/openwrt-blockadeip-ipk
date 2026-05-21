@@ -39,11 +39,23 @@ now() {
 
 valid_ip4() {
 	echo "$1" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || return 1
-	awk -v ip="$1" 'BEGIN{n=split(ip,a,"."); for(i=1;i<=n;i++){ if(a[i] < 0 || a[i] > 255) exit 1 } exit 0 }'
+	awk -v ip="$1" 'BEGIN{n=split(ip,a,"."); if(n!=4) exit 1; for(i=1;i<=n;i++){ if(a[i] < 0 || a[i] > 255) exit 1 } exit 0 }'
+}
+
+is_uint() {
+	echo "$1" | grep -Eq '^[0-9]+$'
+}
+
+validate_step10() {
+	local name="$1" value="$2"
+	is_uint "$value" || { echo "$name must be an integer" >&2; return 1; }
+	[ "$value" -ge 10 ] || { echo "$name must be >= 10" >&2; return 1; }
+	[ $((value % 10)) -eq 0 ] || { echo "$name must be a multiple of 10" >&2; return 1; }
+	return 0
 }
 
 ip_in_cidr_whitelist() {
-	# Simple private/self whitelist is handled before ban. CIDR math is intentionally conservative in V1.
+	# V1 uses a conservative built-in private/self whitelist to avoid locking out LAN management.
 	case "$1" in
 		127.*|10.*|192.168.*) return 0 ;;
 		172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) return 0 ;;
@@ -58,11 +70,7 @@ is_banned_file() {
 log_event() {
 	local action="$1" ip="$2" count="$3" reason="$4"
 	mkdir -p "$(dirname "$log_path")"
-	echo "$(now) $action $ip count=${count:-0} reason=${reason:-manual}" >> "$log_path"
-}
-
-mask_ip() {
-	echo "$1" | awk -F. '{ if (NF == 4) print $1"."$2"."$3".*"; else print $0 }'
+	echo "$(now) $action $ip count=${count:-0} reason=${reason:-manual_cli}" >> "$log_path"
 }
 
 update_public() {
@@ -70,7 +78,7 @@ update_public() {
 	mkdir -p "$public_path"
 	local data="$public_path/data.json"
 	local tmp="$data.tmp"
-	local total banned updated
+	local banned updated
 	banned="$(grep -Ev '^$|^#' "$BANLIST" 2>/dev/null | wc -l | tr -d ' ')"
 	updated="$(now)"
 	{
@@ -80,7 +88,18 @@ update_public() {
 		echo '  "items": ['
 		if [ -f "$log_path" ]; then
 			tail -n "${public_limit:-100}" "$log_path" | awk '
-			function mask(ip, a){ split(ip,a,"."); if(length(a[1])>0&&length(a[2])>0&&length(a[3])>0) return a[1]"."a[2]"."a[3]".*"; return ip }
+			function label_reason(reason, action){
+			  if(reason=="ssh_bruteforce") return "尝试SSH爆破";
+			  if(reason=="web_bruteforce") return "尝试WEB爆破";
+			  if(reason=="luci_bruteforce") return "尝试LuCI后台爆破";
+			  if(reason=="suspicious_login") return "异常登录尝试";
+			  if(reason=="manual_luci") return "管理面板手动封禁";
+			  if(reason=="manual_cli") return "命令行手动封禁";
+			  if(reason=="auto") return "自动识别异常访问";
+			  if(action=="unban") return "管理员解除封禁";
+			  if(action=="flush") return "管理员清空列表";
+			  return reason;
+			}
 			BEGIN{first=1}
 			{
 			  ts=$1" "$2; action=$3; ip=$4; count="0"; reason="";
@@ -91,7 +110,7 @@ update_public() {
 			  if(ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/){
 			    if(!first) printf ",\n";
 			    first=0;
-			    printf "    {\"time\":\"%s\",\"action\":\"%s\",\"ip\":\"%s\",\"count\":%d,\"reason\":\"%s\"}", ts, action, mask(ip), count, reason;
+			    printf "    {\"time\":\"%s\",\"action\":\"%s\",\"ip\":\"%s\",\"count\":%d,\"reason\":\"%s\"}", ts, action, ip, count, label_reason(reason, action);
 			  }
 			}
 			END{ if(!first) printf "\n" }'
@@ -159,16 +178,23 @@ cmd_init() {
 
 cmd_add() {
 	load_cfg; mkdirs; ensure_backend || exit 1
-	local ip="$1" count="$2" reason="$3" rt
+	local ip="$1" count="$2" reason="$3" rt already
 	valid_ip4 "$ip" || { echo "invalid ip" >&2; exit 1; }
 	ip_in_cidr_whitelist "$ip" && { echo "refuse to ban whitelist/private ip" >&2; exit 1; }
+	already=0
+	is_banned_file "$ip" && already=1
 	rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"
 	case "$rt" in
 		ipset) ipset add "$set_name" "$ip" -exist >/dev/null 2>&1 ;;
 		*) iptables -t raw -C "$chain_name" -s "$ip" -j DROP >/dev/null 2>&1 || iptables -t raw -A "$chain_name" -s "$ip" -j DROP >/dev/null 2>&1 ;;
 	esac
-	is_banned_file "$ip" || echo "$ip" >> "$BANLIST"
-	log_event "ban" "$ip" "${count:-0}" "${reason:-manual}"
+	if [ "$already" = "1" ]; then
+		update_public
+		echo "already banned $ip"
+		return 0
+	fi
+	echo "$ip" >> "$BANLIST"
+	log_event "ban" "$ip" "${count:-0}" "${reason:-manual_cli}"
 	update_public
 	echo "banned $ip"
 }
@@ -185,7 +211,7 @@ cmd_del() {
 	tmp="$BANLIST.tmp"
 	grep -vx "$ip" "$BANLIST" > "$tmp" 2>/dev/null || true
 	mv "$tmp" "$BANLIST"
-	log_event "unban" "$ip" 0 "manual"
+	log_event "unban" "$ip" 0 "manual_luci"
 	update_public
 	echo "unbanned $ip"
 }
@@ -199,7 +225,7 @@ cmd_flush() {
 		*) iptables -t raw -F "$chain_name" >/dev/null 2>&1 || true ;;
 	esac
 	: > "$BANLIST"
-	log_event "flush" "0.0.0.0" 0 "manual"
+	log_event "flush" "0.0.0.0" 0 "manual_luci"
 	update_public
 	echo "flushed"
 }
@@ -212,20 +238,33 @@ cmd_stop() {
 	iptables -t raw -X "$chain_name" >/dev/null 2>&1 || true
 }
 
+cmd_set_config() {
+	local new_threshold="$1" new_window="$2"
+	validate_step10 "threshold" "$new_threshold" || exit 1
+	validate_step10 "window" "$new_window" || exit 1
+	uci -q set blockadeip.main.threshold="$new_threshold"
+	uci -q set blockadeip.main.window="$new_window"
+	uci -q commit blockadeip
+	cmd_init
+	echo "config updated"
+}
+
 json_escape() {
 	sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
 cmd_status_json() {
 	load_cfg; mkdirs
-	local rt banned running rule
+	local rt banned running autostart
 	rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"
 	[ -n "$rt" ] || rt="unknown"
 	banned="$(grep -Ev '^$|^#' "$BANLIST" 2>/dev/null | wc -l | tr -d ' ')"
 	running=0
 	if pgrep -f '/usr/sbin/blockadeip daemon' >/dev/null 2>&1; then running=1; fi
-	printf '{"enabled":%s,"running":%s,"backend":"%s","banned":%s,"threshold":%s,"window":%s,"public_page":%s,"public_path":"%s"}\n' \
-		"${enabled:-1}" "$running" "$rt" "${banned:-0}" "${threshold:-20}" "${window:-300}" "${public_page:-1}" "$public_path"
+	autostart=0
+	/etc/init.d/blockadeip enabled >/dev/null 2>&1 && autostart=1
+	printf '{"enabled":%s,"running":%s,"autostart":%s,"backend":"%s","banned":%s,"threshold":%s,"window":%s,"public_page":%s,"public_path":"%s","banlist_path":"%s"}\n' \
+		"${enabled:-1}" "$running" "$autostart" "$rt" "${banned:-0}" "${threshold:-20}" "${window:-300}" "${public_page:-1}" "$public_path" "$BANLIST"
 }
 
 cmd_banlist_json() {
@@ -246,6 +285,18 @@ cmd_logs_json() {
 	local limit="${1:-100}"
 	printf '{"items":['
 	[ -f "$log_path" ] && tail -n "$limit" "$log_path" | awk '
+		function label_reason(reason, action){
+		  if(reason=="ssh_bruteforce") return "尝试SSH爆破";
+		  if(reason=="web_bruteforce") return "尝试WEB爆破";
+		  if(reason=="luci_bruteforce") return "尝试LuCI后台爆破";
+		  if(reason=="suspicious_login") return "异常登录尝试";
+		  if(reason=="manual_luci") return "管理面板手动封禁";
+		  if(reason=="manual_cli") return "命令行手动封禁";
+		  if(reason=="auto") return "自动识别异常访问";
+		  if(action=="unban") return "管理员解除封禁";
+		  if(action=="flush") return "管理员清空列表";
+		  return reason;
+		}
 		BEGIN{first=1}
 		{
 		  ts=$1" "$2; action=$3; ip=$4; count="0"; reason="";
@@ -256,7 +307,7 @@ cmd_logs_json() {
 		  if(ip != ""){
 		    if(!first) printf ",";
 		    first=0;
-		    printf "{\"time\":\"%s\",\"action\":\"%s\",\"ip\":\"%s\",\"count\":%d,\"reason\":\"%s\"}", ts, action, ip, count, reason;
+		    printf "{\"time\":\"%s\",\"action\":\"%s\",\"ip\":\"%s\",\"count\":%d,\"reason\":\"%s\"}", ts, action, ip, count, label_reason(reason, action);
 		  }
 		}'
 	printf ']}\n'
@@ -268,6 +319,13 @@ extract_ip() {
 
 is_fail_line() {
 	echo "$1" | grep -Eiq 'luci: failed login|bad password|Failed password|invalid user|Exit before auth|authentication failure|Login failed'
+}
+
+classify_reason() {
+	local line="$1"
+	echo "$line" | grep -Eiq 'luci: failed login|Login failed' && { echo "web_bruteforce"; return; }
+	echo "$line" | grep -Eiq 'bad password|Failed password|invalid user|Exit before auth|authentication failure|dropbear|sshd' && { echo "ssh_bruteforce"; return; }
+	echo "suspicious_login"
 }
 
 record_attempt() {
@@ -294,7 +352,8 @@ cmd_daemon() {
 		is_banned_file "$ip" && continue
 		count="$(record_attempt "$ip")"
 		if [ "${count:-0}" -ge "${threshold:-20}" ]; then
-			cmd_add "$ip" "$count" "auto"
+			reason="$(classify_reason "$line")"
+			cmd_add "$ip" "$count" "$reason"
 			rm -f "$ATTEMPT_DIR/$ip"
 		fi
 	done
@@ -307,12 +366,13 @@ case "$1" in
 	flush) cmd_flush ;;
 	stop) cmd_stop ;;
 	reload) cmd_init ;;
+	set-config) shift; cmd_set_config "$@" ;;
 	status-json) cmd_status_json ;;
 	banlist-json) cmd_banlist_json ;;
 	logs-json) shift; cmd_logs_json "$@" ;;
 	public) load_cfg; mkdirs; update_public ;;
 	daemon) cmd_daemon ;;
 	*)
-		echo "Usage: blockadeip {init|add IP [count] [reason]|del IP|flush|stop|reload|status-json|banlist-json|logs-json [limit]|public|daemon}"
+		echo "Usage: blockadeip {init|add IP [count] [reason]|del IP|flush|stop|reload|set-config THRESHOLD WINDOW|status-json|banlist-json|logs-json [limit]|public|daemon}"
 		;;
 esac

@@ -9,7 +9,7 @@
     },
     "write": {
       "ubus": {
-        "blockadeip": [ "add", "delete", "flush", "reload", "public" ]
+        "blockadeip": [ "add", "delete", "flush", "reload", "public", "config", "autostart" ]
       },
       "uci": [ "blockadeip" ]
     }

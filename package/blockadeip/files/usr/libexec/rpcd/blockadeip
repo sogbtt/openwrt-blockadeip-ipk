@@ -8,6 +8,8 @@ get_json_value() {
 	jsonfilter -i /tmp/blockadeip-rpc.$$ -e "@.$1" 2>/dev/null
 }
 
+[ "$1" = "call" ] && shift
+
 case "$1" in
 	list)
 		cat <<'JSON'
@@ -19,7 +21,9 @@ case "$1" in
   "flush": {},
   "logs": { "limit": "integer" },
   "reload": {},
-  "public": {}
+  "public": {},
+  "config": { "threshold": "integer", "window": "integer" },
+  "autostart": { "enabled": "integer" }
 }
 JSON
 		;;
@@ -33,7 +37,7 @@ JSON
 		read_input
 		ip="$(get_json_value ip)"
 		rm -f /tmp/blockadeip-rpc.$$
-		out="$(/usr/sbin/blockadeip add "$ip" 0 luci 2>&1)"; rc=$?
+		out="$(/usr/sbin/blockadeip add "$ip" 0 manual_luci 2>&1)"; rc=$?
 		[ $rc -eq 0 ] && printf '{"ok":true,"message":"%s"}\n' "$out" || printf '{"ok":false,"message":"%s"}\n' "$out"
 		;;
 	delete)
@@ -60,6 +64,25 @@ JSON
 		;;
 	public)
 		/usr/sbin/blockadeip public >/dev/null 2>&1
+		printf '{"ok":true}\n'
+		;;
+	config)
+		read_input
+		threshold="$(get_json_value threshold)"
+		window="$(get_json_value window)"
+		rm -f /tmp/blockadeip-rpc.$$
+		out="$(/usr/sbin/blockadeip set-config "$threshold" "$window" 2>&1)"; rc=$?
+		[ $rc -eq 0 ] && printf '{"ok":true,"message":"%s"}\n' "$out" || printf '{"ok":false,"message":"%s"}\n' "$out"
+		;;
+	autostart)
+		read_input
+		enabled="$(get_json_value enabled)"
+		rm -f /tmp/blockadeip-rpc.$$
+		if [ "$enabled" = "1" ]; then
+			/etc/init.d/blockadeip enable >/dev/null 2>&1
+		else
+			/etc/init.d/blockadeip disable >/dev/null 2>&1
+		fi
 		printf '{"ok":true}\n'
 		;;
 	*)
