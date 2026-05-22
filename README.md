@@ -79,7 +79,8 @@ curl -fsSL https://raw.githubusercontent.com/sogbtt/openwrt-blockadeip-ipk/refs/
 
 ### LuCI 管理面板
 
-![LuCI 管理面板](docs/images/luci-overview.png)
+![LuCI 管理面板](<img width="1503" height="686" alt="后台—概览" src="https://github.com/user-attachments/assets/1a509934-76d2-4964-864c-a3f1120197cd" />
+)
 
 ### 已封禁列表
 
