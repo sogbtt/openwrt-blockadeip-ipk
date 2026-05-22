@@ -39,6 +39,12 @@ iptables -t raw -I PREROUTING -m set --match-set blockadeip src -j DROP
 
 封禁 IP 时只向 ipset 写入元素，不再一 IP 一规则，兼顾早期丢包能力和高并发场景下的规则效率。
 
+## V1.4.3 更新内容
+
+- 固化已在设备上验证成功的 rpcd 层 `banlist_json` 修复：LuCI 已封禁列表不再依赖 `/usr/sbin/blockadeip banlist-json`，由 `/usr/libexec/rpcd/blockadeip` 直接读取 `/etc/blockadeip/banlist` 并结合 `/etc/blockadeip/records.tsv` 输出纯 JSON。
+- 清理 rpcd 备份对象风险，避免 `/usr/libexec/rpcd/blockadeip.bak` 这类可执行备份文件被 rpcd 注册成额外 ubus 对象。
+- 固化 Argon 登录页公开入口按钮的实测兼容方案：插入到登录按钮同一个 `div` 内，完整沿用已验证 CSS，仅使用 `/blockadeip/` 和“🛡️ 爆破拦截记录”文案。
+
 ## V1.4.2 更新内容
 
 - 修复 `banlist-json` 输出异常导致已封禁列表无法正常渲染的问题。

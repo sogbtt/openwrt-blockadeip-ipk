@@ -11,8 +11,8 @@ LOCK_DIR="$STATE_DIR/lock"
 BANLIST="/etc/blockadeip/banlist"
 RECORDS="/etc/blockadeip/records.tsv"
 LOG_PATH="/etc/blockadeip/blockadeip.log"
-VERSION="1.4.2"
-CHANGELOG="V1.4.2: 修复已封禁列表原因列显示英文、修复 banlist-json JSON 输出异常、登录页按钮严格按实测样式注入。V1.4.1: 修复Bark提示堆叠、Bark换行显示、已封禁列表为空、表格排版细节。V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
+VERSION="1.4.3"
+CHANGELOG="V1.4.3: 固化已验证的 rpcd 层 banlist_json 修复，避免 LuCI 封禁列表空白；固化 Argon 登录页按钮插入位置与实测 CSS。V1.4.2: 修复已封禁列表原因列显示英文、修复 banlist-json JSON 输出异常、登录页按钮严格按实测样式注入。V1.4.1: 修复Bark提示堆叠、Bark换行显示、已封禁列表为空、表格排版细节。V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
 REPO_URL="https://github.com/sogbtt/openwrt-blockadeip-ipk"
 
 mkdirs() {

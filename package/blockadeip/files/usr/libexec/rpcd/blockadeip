@@ -3,7 +3,59 @@
 TMP="/tmp/blockadeip-rpc.$$"
 read_input() { cat > "$TMP"; }
 jget() { jsonfilter -i "$TMP" -e "@.$1" 2>/dev/null; }
-reply() { printf '{"ok":%s,"message":"%s"}\n' "$1" "$(printf '%s' "$2" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+reply() { printf '{"ok":%s,"message":"%s"}\n' "$1" "$(json_escape "$2")"; }
+
+banlist_json() {
+        local first ip rec time count reason label
+        local banlist="/etc/blockadeip/banlist"
+        local records="/etc/blockadeip/records.tsv"
+
+        printf '{"items":['
+        first=1
+
+        [ -f "$banlist" ] || {
+                printf ']}'
+                echo
+                return
+        }
+
+        while IFS= read -r ip; do
+                [ -n "$ip" ] || continue
+                case "$ip" in
+                        \#*) continue ;;
+                esac
+
+                time=""
+                count="0"
+                reason="current_ban"
+                label="当前封禁中"
+
+                if [ -f "$records" ]; then
+                        rec="$(awk -F '\t' -v qip="$ip" '$2 == qip { line=$0 } END { print line }' "$records" 2>/dev/null)"
+                        if [ -n "$rec" ]; then
+                                time="$(printf '%s\n' "$rec" | cut -f1)"
+                                count="$(printf '%s\n' "$rec" | cut -f3)"
+                                reason="$(printf '%s\n' "$rec" | cut -f4)"
+                                label="$(printf '%s\n' "$rec" | cut -f5)"
+                                [ -n "$label" ] || label="当前封禁中"
+                        fi
+                fi
+
+                [ "$first" = "1" ] || printf ','
+                first=0
+
+                printf '{"ip":"%s","time":"%s","count":%s,"reason":"%s","label":"%s"}' \
+                        "$(json_escape "$ip")" \
+                        "$(json_escape "$time")" \
+                        "${count:-0}" \
+                        "$(json_escape "$reason")" \
+                        "$(json_escape "$label")"
+        done < "$banlist"
+
+        printf ']}'
+        echo
+}
 
 [ "$1" = "call" ] && shift
 
@@ -31,7 +83,7 @@ case "$1" in
 JSON
                 ;;
         status) /usr/sbin/blockadeip status-json ;;
-        banlist) /usr/sbin/blockadeip banlist-json ;;
+        banlist) banlist_json ;;
         logs)
                 read_input; limit="$(jget limit)"; rm -f "$TMP"; [ -n "$limit" ] || limit=100
                 /usr/sbin/blockadeip logs-json "$limit"
