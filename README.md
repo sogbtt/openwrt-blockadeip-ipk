@@ -84,19 +84,23 @@ curl -fsSL https://raw.githubusercontent.com/sogbtt/openwrt-blockadeip-ipk/refs/
 
 ### 已封禁列表
 
-![已封禁列表](docs/images/banlist.png)
+![已封禁列表](<img width="1493" height="510" alt="概览-封禁管理" src="https://github.com/user-attachments/assets/ef8276fd-616e-4ab4-a649-6f3b831e69d8" />
+)
 
 ### 公开处刑页
 
-![公开处刑页](docs/images/public-page.png)
+![公开处刑页](<img width="1492" height="722" alt="公开处刑" src="https://github.com/user-attachments/assets/db3ccb79-23ec-47b1-aca7-c05736fa9aac" />
+)
 
 ### Bark 推送配置
 
-![Bark 推送配置](docs/images/bark-config.png)
+![Bark 推送配置](<img width="1486" height="596" alt="概览-bark推送" src="https://github.com/user-attachments/assets/23d493a3-7ed7-4d36-8ef2-8c7d357d67bb" />
+)
 
 ### LuCI 登录页入口按钮
 
-![LuCI 登录页入口按钮](docs/images/login-button.png)
+![LuCI 登录页入口按钮]()<img width="1151" height="508" alt="luci login" src="https://github.com/user-attachments/assets/235ae21f-7eef-4e9a-96a3-905a5366c7fe" />
+
 
 ---
 
