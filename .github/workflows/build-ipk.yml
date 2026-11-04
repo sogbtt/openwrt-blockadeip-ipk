@@ -84,6 +84,34 @@ jobs:
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           echo "release_r=$rel" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve release notes
+        id: notes
+        run: |
+          f="docs/releasenotes/${GITHUB_REF_NAME}.md"
+          ver="${{ steps.pkg.outputs.version }}"
+          rel="${{ steps.pkg.outputs.release_r }}"
+          install_block() {
+            echo "## 安装"
+            echo
+            echo "适用系统：OpenWrt / ImmortalWrt 24.10+（架构 \`all\`，x86_64 / ARM 通用）"
+            echo
+            echo '```sh'
+            echo "opkg install blockadeip_${ver}-r${rel}_all.ipk"
+            echo "opkg install luci-app-blockadeip_${ver}-r${rel}_all.ipk"
+            echo "/etc/init.d/blockadeip enable"
+            echo "/etc/init.d/blockadeip start"
+            echo "/etc/init.d/rpcd restart"
+            echo '```'
+          }
+          if [ -f "$f" ]; then
+            { cat "$f"; echo; install_block; } > /tmp/release-notes.md
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            { echo "## BlockadeIP ${GITHUB_REF_NAME}"; echo; install_block; } > /tmp/release-notes.md
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "path=/tmp/release-notes.md" >> "$GITHUB_OUTPUT"
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -93,18 +121,6 @@ jobs:
           overwrite_files: true
           files: artifact/*.ipk
           fail_on_unmatched_files: true
-          generate_release_notes: true
-          body: |
-            ## BlockadeIP ${{ github.ref_name }}
-
-            适用系统：OpenWrt / ImmortalWrt 24.10+（架构 `all`，x86_64 / ARM 通用）
-
-            ```sh
-            opkg install blockadeip_${{ steps.pkg.outputs.version }}-r${{ steps.pkg.outputs.release_r }}_all.ipk
-            opkg install luci-app-blockadeip_${{ steps.pkg.outputs.version }}-r${{ steps.pkg.outputs.release_r }}_all.ipk
-            /etc/init.d/blockadeip enable
-            /etc/init.d/blockadeip start
-            /etc/init.d/rpcd restart
-            ```
+          body_path: ${{ steps.notes.outputs.path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
