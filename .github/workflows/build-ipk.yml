@@ -5,6 +5,13 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -62,3 +69,37 @@ jobs:
         with:
           name: openwrt-blockadeip-ipk-x86_64-24.10.0
           path: artifact/*.ipk
+
+      - name: Extract package version
+        id: pkg
+        run: |
+          ver=$(grep -m1 '^PKG_VERSION:=' package/blockadeip/Makefile | cut -d= -f2 | tr -d ' ')
+          rel=$(grep -m1 '^PKG_RELEASE:=' package/blockadeip/Makefile | cut -d= -f2 | tr -d ' ')
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "release=v$ver" >> "$GITHUB_OUTPUT"
+          echo "release_r=$rel" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.pkg.outputs.release }}
+          target_commitish: ${{ github.sha }}
+          overwrite_files: true
+          files: artifact/*.ipk
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            ## BlockadeIP ${{ steps.pkg.outputs.release }}
+
+            适用系统：OpenWrt / ImmortalWrt 24.10+（架构 `all`，x86_64 / ARM 通用）
+
+            ```sh
+            opkg install blockadeip_${{ steps.pkg.outputs.version }}-r${{ steps.pkg.outputs.release_r }}_all.ipk
+            opkg install luci-app-blockadeip_${{ steps.pkg.outputs.version }}-r${{ steps.pkg.outputs.release_r }}_all.ipk
+            /etc/init.d/blockadeip enable
+            /etc/init.d/blockadeip start
+            /etc/init.d/rpcd restart
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
