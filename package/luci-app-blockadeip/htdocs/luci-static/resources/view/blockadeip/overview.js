@@ -132,8 +132,8 @@ return view.extend({
       statusRow('通知标题', whTitle),
       statusRow('超时（秒）', whTimeout),
       statusRow('跳过证书校验', E('label', {}, [ whInsecure, ' 忽略 HTTPS 证书错误（需要 ca-bundle 时建议保持关闭）' ])),
-      statusRow('Headers（每行一个）', E('div', { 'class': 'bip-stack' }, [ E('div', { 'class': 'bip-block' }, [ E('span', { 'class': 'bip-lbl' }, '请求头'), whHeaders ]) ])),
-      statusRow('Body 模板', E('div', { 'class': 'bip-stack' }, [ E('div', { 'class': 'bip-block' }, [ E('span', { 'class': 'bip-lbl' }, '请求体'), whBody ]) ])),
+      statusRow('Headers（每行一个）', whHeaders),
+      statusRow('Body 模板', whBody),
       statusRow('Body 预览', whPreview)
     ]) ]);
     function syncNotifyType() {
@@ -229,17 +229,14 @@ return view.extend({
 
     var css = E('style', {}, `
       .bip-section .table{width:100%;table-layout:fixed;border-collapse:collapse}.bip-section th,.bip-section td{vertical-align:middle;text-align:left;padding:10px 12px;word-break:break-all}.bip-table th:nth-child(1),.bip-table td:nth-child(1){width:22%}.bip-table th:nth-child(2),.bip-table td:nth-child(2){width:24%}.bip-table th:nth-child(3),.bip-table td:nth-child(3){width:34%}.bip-table th:nth-child(4),.bip-table td:nth-child(4){width:20%;text-align:center}.bip-k{width:180px;font-weight:700}.bip-v{word-break:break-all}.bip-scroll{max-height:430px;overflow-y:auto;border:1px solid #ddd;border-radius:6px}.bip-scroll table{margin:0}.bip-ip{font-family:monospace;font-weight:700}.bip-empty{text-align:center;color:#888;padding:24px}.bip-preview{background:#f5f5f5;color:#666;border:1px solid #ddd;border-radius:6px;padding:10px;white-space:pre-wrap;line-height:1.6}.bip-active{font-weight:700;box-shadow:inset 0 -2px 0 #1976d2}.bip-tab-button{margin:0 8px 8px 0}.bip-actions button{margin-right:6px;margin-bottom:6px}.bip-note{color:#666;margin:6px 0 12px 0;line-height:1.6}.bip-warn{color:#d32f2f;font-weight:700}
-      .bip-form{display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;margin:0 0 6px 0}
-      .bip-form .bip-lbl{font-weight:700;white-space:nowrap}
-      .bip-form .bip-unit{color:#666;white-space:nowrap}
-      .bip-form .cbi-input-text,.bip-form .cbi-input-select{width:auto;min-width:120px;margin:0}
-      .bip-form-wide{display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;margin:0 0 6px 0}
-      .bip-form-wide .cbi-input-select{flex:1 1 320px;min-width:280px;max-width:640px;margin:0}
-      .bip-block{margin:18px 0 0 0}
-      .bip-block>.bip-lbl{display:block;margin:0 0 6px 0;font-weight:700;line-height:1.6;text-align:left}
-      .bip-block>textarea,.bip-block>.cbi-input-textarea{display:block !important;width:100% !important;min-height:70px;margin:0 0 16px 0 !important;vertical-align:top;box-sizing:border-box}
-      .bip-block:last-child>textarea,.bip-block:last-child>.cbi-input-textarea{margin-bottom:0 !important}
-      .bip-stack{width:100%}.bip-stack .bip-block{margin-top:0}
+      .bip-actions{padding-left:20px}
+      .bip-field{display:block;padding-left:20px;margin:14px 0 6px 0;font-weight:700;line-height:1.6}
+      .bip-field+textarea,.bip-field+.cbi-input-textarea{display:block;width:100%;padding-left:20px;box-sizing:border-box;vertical-align:top}
+      .bip-table-logs th:nth-child(1),.bip-table-logs td:nth-child(1){width:20%;white-space:nowrap}
+      .bip-table-logs th:nth-child(2),.bip-table-logs td:nth-child(2){width:10%}
+      .bip-table-logs th:nth-child(3),.bip-table-logs td:nth-child(3){width:22%}
+      .bip-table-logs th:nth-child(4),.bip-table-logs td:nth-child(4){width:10%;text-align:center}
+      .bip-table-logs th:nth-child(5),.bip-table-logs td:nth-child(5){width:38%;word-break:break-word}
     `);
 
     var overview = E('div', { id: 'tab-overview', 'class': 'bip-tab' }, [
@@ -277,33 +274,24 @@ return view.extend({
     var rules = E('div', { id: 'tab-rules', 'class': 'bip-tab', style: 'display:none' }, [
       section('封禁后端', [
         E('p', { 'class': 'bip-note' }, '自动模式优先使用 nftables，失败时回退 ipset / iptables。切换后端会清理旧后端残留规则并重启服务。'),
-        E('div', { 'class': 'bip-form-wide' }, [ backendSelect,
+        E('div', { 'class': 'bip-actions' }, [ backendSelect, ' ',
           E('button', { 'class': 'btn cbi-button cbi-button-apply', title: '切换封禁后端并清理旧后端残留规则', 'click': function(){ saveBackend(); } }, '保存后端')
         ])
       ]),
       section('触发阈值', [
-        E('div', { 'class': 'bip-form' }, [
-          E('span', { 'class': 'bip-lbl' }, '检测窗口'),
-          windowInput, E('span', { 'class': 'bip-unit' }, '秒'),
-          E('span', { 'class': 'bip-lbl' }, '触发阈值'),
-          thresholdInput, E('span', { 'class': 'bip-unit' }, '次')
-        ]),
-        E('div', { 'class': 'bip-form' }, [
-          E('span', { 'class': 'bip-lbl' }, '封禁时长'),
-          banMinutes, E('span', { 'class': 'bip-unit' }, '分钟'),
-          banPreset
-        ]),
-        E('p', { 'class': 'bip-note' }, '0 表示永久封禁。封禁时长仅对新封禁生效；到期后 nft 集合元素自动移除，并清理持久化记录。'),
-        E('div', { 'class': 'bip-form' }, [
+        E('div', { 'class': 'bip-actions' }, [ '检测窗口：', windowInput, ' 秒　触发阈值：', thresholdInput, ' 次' ]),
+        E('div', { 'class': 'bip-actions' }, [ '封禁时长：', banMinutes, ' 分钟 ', banPreset ]),
+        E('p', { 'class': 'bip-note', style: 'padding-left:20px;' }, '0 表示永久封禁。封禁时长仅对新封禁生效；到期后 nft 集合元素自动移除，并清理持久化记录。'),
+        E('div', { 'class': 'bip-actions' }, [
           E('button', { 'class': 'btn cbi-button cbi-button-apply', title: '保存检测窗口、失败次数、封禁时长与后端，数值必须为 10 的整数倍', 'click': function(){ saveRules(); } }, '保存配置'),
           E('button', { 'class': 'btn cbi-button cbi-button-action', title: '输入模拟 IP 后，按当前触发阈值写入对应次数的失败日志，并直接执行封禁验证', 'click': function(){ var ip = prompt('请输入需要模拟测试封的公网 IP'); if(!ip) return; callSimulate(ip).then(function(res){ notify(res); setTimeout(function(){ reloadHere(); }, 1200); }); } }, '模拟测试封')
         ])
       ]),
       section('攻击特征匹配关键词', [
         E('p', { 'class': 'bip-note' }, '使用 grep -E 正则。WEB、SSH、补充关键词任一命中后，会从日志中的 from x.x.x.x 提取来源 IP。'),
-        E('div', { 'class': 'bip-block' }, [ E('span', { 'class': 'bip-lbl' }, 'WEB 爆破关键词'), webPatterns ]),
-        E('div', { 'class': 'bip-block' }, [ E('span', { 'class': 'bip-lbl' }, 'SSH 爆破关键词'), sshPatterns ]),
-        E('div', { 'class': 'bip-block' }, [ E('span', { 'class': 'bip-lbl' }, '补充关键词'), extraPatterns ])
+        E('label', { 'class': 'bip-field' }, 'WEB 爆破关键词'), webPatterns,
+        E('label', { 'class': 'bip-field' }, 'SSH 爆破关键词'), sshPatterns,
+        E('label', { 'class': 'bip-field' }, '补充关键词'), extraPatterns
       ])
     ]);
 
@@ -339,7 +327,7 @@ return view.extend({
     var logtab = E('div', { id: 'tab-logs', 'class': 'bip-tab', style: 'display:none' }, [
       section('日志记录', [
         E('div', { 'class': 'bip-actions' }, [ E('button', { 'class': 'btn cbi-button cbi-button-reset', title: '清空持久化审计日志，不会清空当前封禁列表', 'click': function(){ if(!confirm('确认清空日志记录？不会清空已封禁 IP。')) return; callClearLogs().then(function(res){ notify(res); reloadHere(); }); } }, '清空日志') ]),
-        E('div', { 'class': 'bip-scroll' }, [ E('table', { 'class': 'table bip-table' }, [
+        E('div', { 'class': 'bip-scroll' }, [ E('table', { 'class': 'table bip-table bip-table-logs' }, [
           E('thead', {}, E('tr', {}, [ th('时间'), th('动作'), th('IP 地址'), th('次数'), th('原因') ])),
           E('tbody', {}, logRows)
         ]) ])
