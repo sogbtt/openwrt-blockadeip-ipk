@@ -2,13 +2,16 @@ name: Build OpenWrt BlockadeIP IPK
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: '要构建的提交 / 标签（留空则使用当前分支最新提交）'
+        required: false
+        default: ''
   push:
     branches:
       - main
     tags:
       - 'v*'
-  release:
-    types: [published]
 
 permissions:
   contents: write
@@ -19,6 +22,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
 
       - name: Install host dependencies
         run: |
@@ -76,21 +82,20 @@ jobs:
           ver=$(grep -m1 '^PKG_VERSION:=' package/blockadeip/Makefile | cut -d= -f2 | tr -d ' ')
           rel=$(grep -m1 '^PKG_RELEASE:=' package/blockadeip/Makefile | cut -d= -f2 | tr -d ' ')
           echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "release=v$ver" >> "$GITHUB_OUTPUT"
           echo "release_r=$rel" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
-        if: github.event_name == 'push'
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.pkg.outputs.release }}
+          tag_name: ${{ github.ref_name }}
           target_commitish: ${{ github.sha }}
           overwrite_files: true
           files: artifact/*.ipk
           fail_on_unmatched_files: true
           generate_release_notes: true
           body: |
-            ## BlockadeIP ${{ steps.pkg.outputs.release }}
+            ## BlockadeIP ${{ github.ref_name }}
 
             适用系统：OpenWrt / ImmortalWrt 24.10+（架构 `all`，x86_64 / ARM 通用）
 
