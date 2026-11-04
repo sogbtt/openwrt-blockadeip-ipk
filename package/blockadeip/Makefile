@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=blockadeip
-PKG_VERSION:=1.5.0
+PKG_VERSION:=1.6.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=sogbtt
@@ -13,11 +13,11 @@ define Package/blockadeip
   CATEGORY:=Network
   TITLE:=BlockadeIP early inbound blocker
   PKGARCH:=all
-  DEPENDS:=+iptables +ipset +jsonfilter +rpcd +logd
+  DEPENDS:=+nftables-json +kmod-nft-core +jsonfilter +rpcd +logd
 endef
 
 define Package/blockadeip/description
-BlockadeIP uses iptables raw PREROUTING with ipset to block high-risk source IPs early, with persistent records, public deterrence page and LuCI RPC backend.
+BlockadeIP uses nftables (independent inet table with a prerouting/raw priority chain) to block high-risk source IPs early, with persistent records, public deterrence page and LuCI RPC backend. ipset/iptables fallback is kept for legacy systems.
 endef
 
 define Build/Compile

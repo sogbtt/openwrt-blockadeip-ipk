@@ -174,7 +174,7 @@ return view.extend({
     var banRows = bans.length ? bans.map(function(x) {
       return E('tr', {}, [
         cell(x.ip, 'bip-ip'), cell(x.time || '-'), cell(x.label || x.reason || '-'),
-        E('td', {}, E('button', { 'class': 'btn cbi-button cbi-button-remove', title: '从封禁列表、ipset 和持久化记录中移除此 IP', 'click': function(){ if (!confirm('确认移除 ' + x.ip + ' ?')) return; callDelete(x.ip).then(function(res){ notify(res); reloadHere(); }); } }, '移除'))
+        E('td', {}, E('button', { 'class': 'btn cbi-button cbi-button-remove', title: '从封禁列表、nft 集合和持久化记录中移除此 IP', 'click': function(){ if (!confirm('确认移除 ' + x.ip + ' ?')) return; callDelete(x.ip).then(function(res){ notify(res); reloadHere(); }); } }, '移除'))
       ]);
     }) : [ E('tr', {}, E('td', { colspan: 4, 'class': 'bip-empty' }, '暂无封禁 IP')) ];
 
@@ -203,10 +203,10 @@ return view.extend({
 
     var manage = E('div', { id: 'tab-manage', 'class': 'bip-tab', style: 'display:none' }, [
       section('手动操作', [
-        E('p', { 'class': 'bip-note' }, '默认使用 iptables raw PREROUTING + ipset，绕开常规 zone 链路，在入站早期丢弃来源 IP。'),
+        E('p', { 'class': 'bip-note' }, '默认使用 nftables 独立表 inet blockadeip（prerouting / raw 优先级），绕开常规 zone 链路，在入站最早阶段丢弃来源 IP。旧系统会自动回退到 ipset / iptables。'),
         E('div', { 'class': 'bip-actions' }, [ ipInput, ' ',
           E('button', { 'class': 'btn cbi-button cbi-button-apply', title: '输入需要封禁的公网 IP 后确认添加', 'click': function(){ var ip = ipInput.value.trim(); if(!ip) return ui.addNotification(null,E('p',{},'请输入 IP'),'warning'); callAdd(ip).then(function(res){ notify(res); reloadHere(); }); } }, '添加封禁'),
-          E('button', { 'class': 'btn cbi-button cbi-button-reload', title: '重新加载 ipset/raw 规则并恢复持久化封禁列表', 'click': function(){ callReload().then(function(res){ notify(res); reloadHere(); }); } }, '重载规则'),
+          E('button', { 'class': 'btn cbi-button cbi-button-reload', title: '重新创建 nft 表/集合并恢复持久化封禁列表', 'click': function(){ callReload().then(function(res){ notify(res); reloadHere(); }); } }, '重载规则'),
           E('button', { 'class': 'btn cbi-button cbi-button-neutral', title: '重新生成 /www/blockadeip/data.json 公开页数据', 'click': function(){ callPublic().then(function(res){ notify(res); reloadHere(); }); } }, '刷新公开页'),
           E('button', { 'class': 'btn cbi-button cbi-button-reset', title: '清空所有封禁列表，请谨慎操作', 'click': function(){ if(!confirm('确认清空所有封禁 IP？')) return; callFlush().then(function(res){ notify(res); reloadHere(); }); } }, '清空封禁')
         ])

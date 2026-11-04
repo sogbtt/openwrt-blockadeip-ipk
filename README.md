@@ -1,6 +1,6 @@
 # OpenWrt-BlockadeIP
 
-> 基于 `iptables raw PREROUTING + ipset` 的 OpenWrt / ImmortalWrt 早期入站封禁 LuCI 插件。  
+> 基于 `nftables` 独立表 + `prerouting/raw` 优先级 的 OpenWrt / ImmortalWrt 早期入站封禁 LuCI 插件。  
 > 适用于 SSH 爆破、LuCI 登录爆破、WEB 后台高频异常访问、端口转发场景下的来源 IP 快速封禁与公开威慑展示。
 
 ---
@@ -18,7 +18,7 @@ curl -fsSL https://raw.githubusercontent.com/sogbtt/openwrt-blockadeip-ipk/refs/
 - 不安装插件
 - 不修改 BlockadeIP 配置
 - 不持久化防火墙规则
-- 仅创建临时 ipset / 临时 raw 测试规则，并在结束后自动清理
+- 仅创建临时 nft 测试表（`inet blockadeip_check_tmp`），并在结束后自动清理
 
 ---
 
@@ -32,8 +32,8 @@ curl -fsSL https://raw.githubusercontent.com/sogbtt/openwrt-blockadeip-ipk/refs/
 | 内核 | Linux 6.12.18 |
 | 架构 | x86/64 |
 | Web 服务 | nginx / luci-nginx |
-| 防火墙环境 | iptables v1.8.10 `(nf_tables)` 兼容模式 |
-| 封禁后端 | iptables raw + ipset |
+| 防火墙环境 | fw4 / nftables |
+| 封禁后端 | nftables（`table inet blockadeip`） |
 | LuCI | LuCI 25.x / Argon 主题 |
 
 ### 推荐环境
@@ -42,8 +42,9 @@ curl -fsSL https://raw.githubusercontent.com/sogbtt/openwrt-blockadeip-ipk/refs/
 |---|---|
 | 系统 | OpenWrt / ImmortalWrt 23.05+ / 24.10+ |
 | 架构 | x86/64、rockchip/armv8、armsr/armv8 等 |
-| 防火墙 | 支持 iptables raw 表 |
-| 高性能集合 | 支持 ipset |
+| 防火墙 | 支持 nftables（OpenWrt 22.03+ / 24.10 默认 fw4） |
+| 高性能集合 | nftables set（`flags timeout`），无需 ipset |
+| 旧系统回退 | 无 nft 时自动回退到 ipset + iptables raw |
 | 日志系统 | 支持 logread / logger |
 | Web 管理 | LuCI + rpcd |
 | 公开页 | `/www` 目录可被 nginx / uhttpd / openresty 访问 |
@@ -52,9 +53,9 @@ curl -fsSL https://raw.githubusercontent.com/sogbtt/openwrt-blockadeip-ipk/refs/
 
 | 场景 | 预计支持情况 |
 |---|---|
-| 传统 iptables 防火墙 | 支持，前提是 raw 表和 ipset 可用 |
-| firewall4 / nftables 系统 | 支持，前提是 iptables-nft 兼容层可正常使用 raw + ipset |
-| iptables v1.8.x `(nf_tables)` | 推荐，已验证 |
+| 传统 iptables 防火墙 | 兼容：自动回退到 ipset + iptables raw |
+| firewall4 / nftables 系统 | 推荐，原生 nft 后端 |
+| OpenWrt 24.10+ | 推荐，已验证 |
 | LuCI 跑在 nginx / luci-nginx | 支持，已验证 |
 | LuCI 跑在 uHTTPd | 理论支持，公开页放在 `/www/blockadeip/` |
 | 端口转发 / DNAT 场景 | 支持，这是本项目重点场景 |
@@ -64,11 +65,9 @@ curl -fsSL https://raw.githubusercontent.com/sogbtt/openwrt-blockadeip-ipk/refs/
 
 | 环境 | 说明 |
 |---|---|
-| 无 iptables raw 表 | 不建议使用，核心早期封禁能力不可用 |
-| 无 ipset | 不建议使用，会失去高性能集合封禁能力 |
+| 无 nftables | 会回退到 ipset/iptables；两者都缺则不建议使用 |
 | 极简固件缺少 rpcd / LuCI | 核心脚本可能可用，但 LuCI 面板不可用 |
 | 非 OpenWrt 系统 | 不保证可用 |
-| 纯 nftables 且完全无 iptables 兼容层 | 暂不作为主要支持目标 |
 | 不理解公网管理口风险的环境 | 不建议暴露 LuCI / SSH 到公网 |
 
 ---
@@ -105,7 +104,7 @@ OpenWrt-BlockadeIP 不是传统意义上的 firewall4 规则管理器，也不�
 
 它的定位是：
 
-> 在数据包进入路由器的最早阶段，通过 `raw PREROUTING` 对高风险来源 IP 进行快速丢弃，绕开复杂 zone / forward / DNAT 链路带来的命中不确定性。
+> 在数据包进入路由器的最早阶段，通过独立 nftables 表（`prerouting` / `priority raw`）对高风险来源 IP 进行快速丢弃，绕开复杂 zone / forward / DNAT 链路带来的命中不确定性。
 
 适合这类用户：
 
@@ -114,7 +113,7 @@ OpenWrt-BlockadeIP 不是传统意义上的 firewall4 规则管理器，也不�
 - 遇到过端口转发后普通防火墙规则不生效
 - 想要 LuCI 可视化管理封禁 IP
 - 想要公开威慑页展示被拦截来源
-- 想要 Bark 推送封禁通知
+- 想要 Bark / Webhook 推送封禁通知
 
 ---
 
@@ -124,22 +123,32 @@ OpenWrt-BlockadeIP 不是传统意义上的 firewall4 规则管理器，也不�
 
 默认使用：
 
-```sh
-iptables -t raw -I PREROUTING -m set --match-set blockadeip src -j DROP
+```nft
+table inet blockadeip {
+        set v4 { type ipv4_addr; flags timeout; size 65536; }
+        set v6 { type ipv6_addr; flags timeout; size 65536; }
+        chain prerouting {
+                type filter hook prerouting priority raw; policy accept;
+                ip saddr @v4 drop
+                ip6 saddr @v6 drop
+        }
+}
 ```
 
 封禁 IP 时写入：
 
 ```sh
-ipset add blockadeip <IP>
+nft add element inet blockadeip v4 { 1.2.3.4 }
 ```
 
 优势：
 
+- `priority raw`（-300）比 banIP 的 -150 更早，包在 conntrack 之前就被丢弃
 - 比 filter / FORWARD 更早
 - 比常规 zone 链路更直接
 - 适合 DNAT / 端口转发场景
 - 大量 IP 时比“一 IP 一规则”更高效
+- 独立表不受 `fw4` 的 `nftables.d` 加载与清理影响
 
 ---
 
@@ -259,24 +268,69 @@ LuCI 中可编辑：
 
 ---
 
-### 7. Bark 推送
+### 7. 通知推送（Bark / Webhook）
 
-支持 Bark 推送封禁通知。
+支持 Bark 与任意自定义 Webhook 推送封禁通知。
 
 可配置：
 
-- 启用 / 停用 Bark 推送
-- Bark 服务器地址
-- 推送模板
+- 启用 / 停用通知推送
+- 推送方式：Bark / Webhook
+- Bark 服务器地址、内置模板、自定义模板
+- Webhook URL、请求方法（GET/POST/PUT/PATCH/DELETE）、Content-Type
+- Webhook Headers（每行一个，支持 `Authorization: Bearer xxx` 这类含空格的值）
+- Webhook Body 模板
+- 超时时间、是否跳过 HTTPS 证书校验
 - 测试推送
-- 自定义模板
 
-内置模板：
+内置 Bark 模板：
 
 - 精简模板
 - 完整模板
 - 运维模板
 - 自定义模板
+
+#### Webhook 占位符
+
+| 占位符 | 说明 |
+|---|---|
+| `{ip}` `{reason}` `{count}` `{time}` `{title}` | 原始值（reason 已转为中文标签） |
+| `{ip_json}` `{reason_json}` `{time_json}` `{title_json}` | JSON 转义后的值 |
+| `{ip_url}` `{reason_url}` `{time_url}` `{title_url}` | URL 编码后的值 |
+| `{json}` | 完整 JSON 对象 |
+
+> 替换顺序上长名优先（`{ip_json}` 先于 `{ip}`），可以放心混用。
+
+#### 默认 Body
+
+```json
+{"title":"{title}","ip":"{ip}","reason":"{reason}","count":{count},"time":"{time}"}
+```
+
+#### 文件位置
+
+| 文件 | 作用 |
+|---|---|
+| `/etc/blockadeip/webhook.body` | Webhook 请求体模板（权限 600） |
+| `/etc/blockadeip/webhook.headers` | Webhook 请求头，每行一个（权限 600） |
+
+#### HTTP 客户端选择
+
+自动探测：`uclient-fetch` → `curl` → `wget`，无需额外安装。
+
+> `uclient-fetch` 默认不校验 HTTPS 证书（需要 `ca-bundle` 才严格校验）。如需严格校验请 `opkg install ca-bundle`；否则可开启“跳过证书校验”。
+
+#### 配置示例（UCI）
+
+```sh
+uci set blockadeip.push.enabled='1'
+uci set blockadeip.push.type='webhook'
+uci set blockadeip.push.webhook_url='https://example.com/hook'
+uci set blockadeip.push.webhook_method='POST'
+uci set blockadeip.push.webhook_content_type='application/json'
+uci commit blockadeip
+/etc/init.d/blockadeip restart
+```
 
 ---
 
@@ -288,6 +342,8 @@ LuCI 中可编辑：
 /etc/blockadeip/banlist
 /etc/blockadeip/records.tsv
 /etc/blockadeip/blockadeip.log
+/etc/blockadeip/webhook.body
+/etc/blockadeip/webhook.headers
 ```
 
 说明：
@@ -301,9 +357,12 @@ LuCI 中可编辑：
 重启后会自动：
 
 1. 读取 `/etc/blockadeip/banlist`
-2. 恢复到 ipset
-3. 恢复 raw PREROUTING 总入口规则
+2. 重建 `table inet blockadeip`（若已被清理）
+3. 批量恢复到 nft 集合（单进程，`nft -f -`）
 4. 生成公开页数据
+
+> 停用服务 / 关闭服务开关会移除 nft 表，即**立即解除全部拦截**；`banlist` 文件保留，重新启动后自动恢复。
+> `ban_time > 0` 时，重启后封禁时长重新计时（默认 `0` 为永久封禁，不受影响）。
 
 ---
 
@@ -338,17 +397,23 @@ BlockadeIP 直接在更早阶段处理：
 ```text
 外部数据包进入路由器
   ↓
-raw PREROUTING
+prerouting hook（priority raw，-300）
   ↓
-匹配 ipset 黑名单
+匹配 nft set v4 / v6
   ↓
 DROP
 ```
 
 也就是：
 
-```sh
-iptables -t raw -I PREROUTING -m set --match-set blockadeip src -j DROP
+```nft
+table inet blockadeip {
+        chain prerouting {
+                type filter hook prerouting priority raw; policy accept;
+                ip saddr @v4 drop
+                ip6 saddr @v6 drop
+        }
+}
 ```
 
 这意味着：
@@ -357,35 +422,32 @@ iptables -t raw -I PREROUTING -m set --match-set blockadeip src -j DROP
 - 不依赖 zone 判断
 - 不依赖具体服务端口
 - 不依赖 Docker 网络路径
-- 只要来源 IP 命中黑名单，直接在早期丢弃
+- 只要来源 IP 命中黑名单，直接在最早阶段丢弃
 
 ---
 
-### 为什么使用 ipset？
+### 为什么使用 nft set？
 
 如果每个 IP 都写一条规则：
 
-```sh
-iptables -t raw -A PREROUTING -s 1.2.3.4 -j DROP
-iptables -t raw -A PREROUTING -s 5.6.7.8 -j DROP
+```nft
+ip saddr 1.2.3.4 drop
+ip saddr 5.6.7.8 drop
 ```
 
 IP 多了以后规则会膨胀，性能和维护性都会下降。
 
 BlockadeIP 使用：
 
-```sh
-ipset create blockadeip hash:ip
-ipset add blockadeip 1.2.3.4
+```nft
+add element inet blockadeip v4 { 1.2.3.4 }
 ```
 
-然后只保留一条总入口规则：
+然后只保留两条总入口规则（v4 / v6 各一条）。
 
-```sh
-iptables -t raw -I PREROUTING -m set --match-set blockadeip src -j DROP
-```
+这样更适合 100 / 500 / 更多 IP 的封禁场景，且 `flags timeout` 天然支持封禁到期自动解封。
 
-这样更适合 100 / 500 / 更多 IP 的封禁场景。
+> 旧系统（无 nft）会自动回退到 ipset + iptables raw 方案，行为一致。
 
 ---
 
@@ -435,7 +497,7 @@ opkg install ./luci-app-blockadeip_x.x.x-r1_all.ipk
 - 添加手动封禁 IP
 - 查看已封禁列表
 - 查看日志
-- 配置 Bark 推送
+- 配置 Bark / Webhook 通知推送
 - 安装登录页公开入口
 - 打开 `/blockadeip/` 查看公开威慑页
 
@@ -473,16 +535,22 @@ ubus call blockadeip banlist
 /usr/sbin/blockadeip public
 ```
 
-### 查看 raw 入口规则
+### 查看 nft 表
 
 ```sh
-iptables -t raw -S PREROUTING | grep blockadeip
+nft list table inet blockadeip
 ```
 
-### 查看 ipset
+### 查看封禁集合
 
 ```sh
-ipset list blockadeip
+nft list set inet blockadeip v4
+```
+
+### 手动测试通知推送
+
+```sh
+/usr/sbin/blockadeip notify-test
 ```
 
 ---
@@ -533,6 +601,27 @@ BlockadeIP 只负责基于日志识别高频失败行为，并封禁来源 IP。
 ---
 
 ## 更新日志
+
+### V1.6.0
+
+- 封禁后端迁移到原生 nftables：独立 `table inet blockadeip`，`prerouting` / `priority raw`。
+- 支持 `flags timeout` 封禁超时（`ban_time`）。
+- 重启自动重建表并批量恢复封禁列表（单进程 `nft -f -`，显著降低小内存设备开销）。
+- 停用服务 / 关闭开关会移除 nft 表，立即解除全部拦截。
+- 保留 ipset / iptables 回退，旧系统行为不变。
+- 依赖改为 `nftables-json + kmod-nft-core`，不再强制 iptables / ipset。
+- `check-env.sh` 改为检测 nft / fw4。
+
+### V1.5.0
+
+- 通知层抽象，新增通用 Webhook 推送。
+- Webhook 支持自定义 URL、请求方法、Content-Type、Headers、Body。
+- 支持占位符 `{ip}` `{reason}` `{count}` `{time}` `{title}` 及 `{*_json}` `{*_url}` `{json}`。
+- Bark 配置保持向后兼容（section 仍为 `push`）。
+- 通知发送移出封禁锁，HTTP 超时不再阻塞封禁。
+- HTTP 客户端自动选择 `uclient-fetch` / `curl` / `wget`。
+- 新增 `save_notify` / `test_notify` RPC，`bark_test` 保留为别名。
+- LuCI 将「Bark推送」页改为「通知推送」。
 
 ### V1.4.3
 
