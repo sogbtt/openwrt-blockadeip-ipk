@@ -70,6 +70,17 @@ command -v ipset >/dev/null 2>&1 && pass "ipset 已安装: $(ipset --version 2>/
 command -v iptables >/dev/null 2>&1 && pass "iptables 已安装: $(iptables -V)" || warn "iptables 未安装（新版本不再需要）"
 
 say
+say "----- 封禁后端可用性 -----"
+if command -v nft >/dev/null 2>&1 && nft list ruleset >/dev/null 2>&1; then
+    say "可用于后端: nftables（推荐）"
+fi
+if command -v ipset >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
+    say "可用于后端: ipset + iptables（兼容模式）"
+else
+    say "ipset + iptables 不可用，选择该后端前请先 opkg install ipset iptables"
+fi
+
+say
 say "----- 通知推送 -----"
 command -v uclient-fetch >/dev/null 2>&1 && pass "uclient-fetch 可用（Webhook 首选客户端）" || warn "uclient-fetch 缺失，将回退 curl/wget"
 command -v curl >/dev/null 2>&1 && pass "curl 可用" || true

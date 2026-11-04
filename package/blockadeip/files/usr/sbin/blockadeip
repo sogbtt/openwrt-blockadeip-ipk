@@ -12,8 +12,8 @@ NFT_TABLE="blockadeip"
 BANLIST="/etc/blockadeip/banlist"
 RECORDS="/etc/blockadeip/records.tsv"
 LOG_PATH="/etc/blockadeip/blockadeip.log"
-VERSION="1.6.0"
-CHANGELOG="V1.6.0: 封禁后端迁移到原生 nftables，使用独立表 inet blockadeip 与 prerouting/raw 优先级，支持封禁超时，重启自动恢复；保留 ipset/iptables 回退；停用服务会移除拦截规则；批量恢复封禁列表显著降低小内存设备开销。V1.5.0: 通知层抽象，新增通用 Webhook 推送，支持自定义 URL、请求方法、Headers、Body 与 {ip}{reason}{count}{time}{title} 及 JSON/URL 编码变体；Bark 配置保持向后兼容；通知发送移出封禁锁避免阻塞封禁；新增通知测试与模板文件。V1.4.3: 固化已验证的 rpcd 层 banlist_json 修复，避免 LuCI 封禁列表空白；固化 Argon 登录页按钮插入位置与实测 CSS。V1.4.2: 修复已封禁列表原因列显示英文、修复 banlist-json JSON 输出异常、登录页按钮严格按实测样式注入。V1.4.1: 修复Bark提示堆叠、Bark换行显示、已封禁列表为空、表格排版细节。V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
+VERSION="1.6.1"
+CHANGELOG="V1.6.1: 封禁后端可在页面切换（自动/仅 nftables/ipset），切换时自动清理旧后端残留规则；封禁时长可视化配置（0 为永久），概览页展示后端与时长；新增过期封禁自动清理，避免到期 IP 永久卡在封禁列表。V1.6.0: 封禁后端迁移到原生 nftables，使用独立表 inet blockadeip 与 prerouting/raw 优先级，支持封禁超时，重启自动恢复；保留 ipset/iptables 回退；停用服务会移除拦截规则；批量恢复封禁列表显著降低小内存设备开销。V1.5.0: 通知层抽象，新增通用 Webhook 推送，支持自定义 URL、请求方法、Headers、Body 与 {ip}{reason}{count}{time}{title} 及 JSON/URL 编码变体；Bark 配置保持向后兼容；通知发送移出封禁锁避免阻塞封禁；新增通知测试与模板文件。V1.4.3: 固化已验证的 rpcd 层 banlist_json 修复，避免 LuCI 封禁列表空白；固化 Argon 登录页按钮插入位置与实测 CSS。V1.4.2: 修复已封禁列表原因列显示英文、修复 banlist-json JSON 输出异常、登录页按钮严格按实测样式注入。V1.4.1: 修复Bark提示堆叠、Bark换行显示、已封禁列表为空、表格排版细节。V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
 REPO_URL="https://github.com/sogbtt/openwrt-blockadeip-ipk"
 
 mkdirs() {
@@ -166,6 +166,7 @@ label_reason() {
                 luci|manual_luci|manual) echo "管理面板手动封禁" ;;
                 test) echo "模拟测试封禁" ;;
                 current_ban) echo "当前封禁中" ;;
+                expired) echo "已到期自动解封" ;;
                 *) [ -n "$1" ] && echo "$1" || echo "未知原因" ;;
         esac
 }
@@ -228,6 +229,85 @@ EOF
 nft_destroy_table() {
         nft delete table inet "$NFT_TABLE" 2>/dev/null || true
         rm -f "$RUNTIME_BACKEND"
+}
+
+ipset_backend_cleanup() {
+        command -v iptables >/dev/null 2>&1 || return 0
+        while iptables -t raw -C PREROUTING -m set --match-set "$set_name" src -j DROP 2>/dev/null; do
+                iptables -t raw -D PREROUTING -m set --match-set "$set_name" src -j DROP 2>/dev/null
+        done
+        while iptables -t raw -C PREROUTING -j "$chain_name" 2>/dev/null; do
+                iptables -t raw -D PREROUTING -j "$chain_name" 2>/dev/null
+        done
+        iptables -t raw -F "$chain_name" 2>/dev/null
+        iptables -t raw -X "$chain_name" 2>/dev/null
+        command -v ipset >/dev/null 2>&1 && ipset destroy "$set_name" 2>/dev/null
+        return 0
+}
+
+# 清理当前未使用的后端残余，避免新旧两套规则同时生效
+cleanup_stale_backend() {
+        local keep="$1"
+        [ "$keep" = "nft" ] || nft_destroy_table
+        [ "$keep" = "ipset" ] || [ "$keep" = "chain" ] || ipset_backend_cleanup
+        return 0
+}
+
+nft_alive_ips() {
+        nft -j list set inet "$NFT_TABLE" v4 2>/dev/null \
+                | jsonfilter -e '@.nftables[*].elem[*].elem.val' 2>/dev/null
+}
+
+nft_element_count() {
+        local n
+        n="$(nft_alive_ips | grep -c '[0-9]')"
+        echo "${n:-0}"
+}
+
+# 清理已过期（nft 集合中已不存在）的封禁记录，仅 nft + ban_time > 0 时执行
+prune_expired() {
+        local rt alive stale first=1 ips="" tmp="$STATE_DIR"
+        [ "${ban_time:-0}" -gt 0 ] 2>/dev/null || return 0
+        rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"
+        [ "$rt" = "nft" ] || return 0
+        nft_table_exists || return 0
+        [ -f "$BANLIST" ] || return 0
+        mkdir -p "$tmp"
+
+        alive="$(nft_alive_ips)"
+        stale="$(awk -v alive="$(printf '%s' "$alive" | tr '\n' ' ')" '
+                BEGIN {
+                        n = split(alive, arr, " ")
+                        for (i = 1; i <= n; i++) if (arr[i] != "") keep[arr[i]] = 1
+                }
+                /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { if (!($0 in keep)) print $0 }
+        ' "$BANLIST" 2>/dev/null)"
+        [ -n "$stale" ] || return 0
+
+        # banlist：保留未过期的行
+        awk -v stale="$(printf '%s' "$stale" | tr '\n' ' ')" '
+                BEGIN { n = split(stale, arr, " "); for (i = 1; i <= n; i++) if (arr[i] != "") drop[arr[i]] = 1 }
+                { if (!($0 in drop)) print }
+        ' "$BANLIST" > "$tmp/prune.banlist" 2>/dev/null
+        # records：删除过期 IP 的记录行（第 2 列为 IP）
+        awk -F '\t' -v stale="$(printf '%s' "$stale" | tr '\n' ' ')" '
+                BEGIN { n = split(stale, arr, " "); for (i = 1; i <= n; i++) if (arr[i] != "") drop[arr[i]] = 1 }
+                !($2 in drop)
+        ' "$RECORDS" > "$tmp/prune.records" 2>/dev/null
+
+        [ -f "$tmp/prune.banlist" ] && mv "$tmp/prune.banlist" "$BANLIST"
+        [ -f "$tmp/prune.records" ] && mv "$tmp/prune.records" "$RECORDS"
+
+        ips="$(printf '%s' "$stale" | tr '\n' ' ')"
+        for ip in $ips; do
+                [ -n "$ip" ] || continue
+                [ "$first" = "1" ] || printf ','
+                first=0
+                printf '%s' "$ip"
+                echo "$(now_time) expire $ip count=0 reason=expired" >> "$LOG_PATH"
+        done
+        [ "$first" = "1" ] || echo
+        return 0
 }
 
 backend_add() {
@@ -513,6 +593,8 @@ cmd_add() {
         valid_ip4 "$ip" || { echo "invalid ip" >&2; exit 1; }
         ip_in_cidr_whitelist "$ip" && { echo "protected ip or lan subnet: $ip" >&2; exit 2; }
         lock_acquire || { echo "lock timeout" >&2; exit 1; }
+        # 过期封禁先清理，避免过期 IP 因仍在文件里而无法被重新封禁
+        prune_expired >/dev/null 2>&1
         if is_banned_file "$ip"; then
                 lock_release
                 update_public
@@ -586,12 +668,19 @@ cmd_status_json() {
         /etc/init.d/blockadeip enabled >/dev/null 2>&1 && autostart=1
         rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"; [ -n "$rt" ] || rt="unknown"
         # nft 表被外部 flush（fw4 reload 等）时如实报告，提示用户重载
-        [ "$rt" = "nft" ] && { nft_table_exists || rt="nft-missing"; }
-        banned="$(grep -cv '^\s*$' "$BANLIST" 2>/dev/null || echo 0)"
+        if [ "$rt" = "nft" ]; then
+                if nft_table_exists; then
+                        # nft + 有时长时以集合元素为准，避免过期 IP 虚高
+                        [ "${ban_time:-0}" -gt 0 ] 2>/dev/null && banned="$(nft_element_count)"
+                else
+                        rt="nft-missing"
+                fi
+        fi
+        [ -n "${banned:-}" ] || banned="$(grep -cv '^\s*$' "$BANLIST" 2>/dev/null || echo 0)"
         repo="$(printf '%s' "$repo_url" | json_escape)"
         changelog_j="$(printf '%s' "$changelog" | json_escape)"
-        printf '{"enabled":%s,"running":%s,"autostart":%s,"backend":"%s","banned":%s,"threshold":%s,"window":%s,"public_page":%s,"public_path":"%s","banlist_path":"%s","version":"%s","repo_url":"%s","changelog":"%s","login_button":%s}\n' \
-                "${enabled:-1}" "$running" "$autostart" "$rt" "${banned:-0}" "${threshold:-20}" "${window:-300}" "${public_page:-1}" "$public_path" "$BANLIST" "$version" "$repo" "$changelog_j" "${login_button:-1}"
+        printf '{"enabled":%s,"running":%s,"autostart":%s,"backend":"%s","backend_setting":"%s","ban_time":%s,"banned":%s,"threshold":%s,"window":%s,"public_page":%s,"public_path":"%s","banlist_path":"%s","version":"%s","repo_url":"%s","changelog":"%s","login_button":%s}\n' \
+                "${enabled:-1}" "$running" "$autostart" "$rt" "${backend:-auto}" "${ban_time:-0}" "${banned:-0}" "${threshold:-20}" "${window:-300}" "${public_page:-1}" "$public_path" "$BANLIST" "$version" "$repo" "$changelog_j" "${login_button:-1}"
 }
 
 cmd_banlist_json() {
@@ -636,7 +725,7 @@ cmd_logs_json() {
         {
           ts=$1" "$2; action=$3; ip=$4; count="0"; reason=""; label="";
           for(i=5;i<=NF;i++){ if($i ~ /^count=/){sub(/^count=/,"",$i); count=$i} if($i ~ /^reason=/){sub(/^reason=/,"",$i); reason=$i} }
-          if(reason=="web_bruteforce") label="尝试WEB爆破"; else if(reason=="ssh_bruteforce") label="尝试SSH爆破"; else if(reason=="manual_luci" || reason=="luci" || reason=="manual") label="管理面板手动封禁"; else if(reason=="test") label="模拟测试封禁"; else if(reason=="") label="未知原因"; else label=reason;
+          if(reason=="web_bruteforce") label="尝试WEB爆破"; else if(reason=="ssh_bruteforce") label="尝试SSH爆破"; else if(reason=="manual_luci" || reason=="luci" || reason=="manual") label="管理面板手动封禁"; else if(reason=="test") label="模拟测试封禁"; else if(reason=="expired") label="已到期自动解封"; else if(reason=="") label="未知原因"; else label=reason;
           if(ip!="") { if(!first) printf ","; first=0; gsub(/\\/,"\\\\",label); gsub(/\"/,"\\\"",label); printf "{\"time\":\"%s\",\"action\":\"%s\",\"ip\":\"%s\",\"count\":%d,\"reason\":\"%s\"}", ts, action, ip, count+0, label }
         }'
         printf ']}\n'
@@ -647,8 +736,8 @@ cmd_config_json() {
         local wbody="" wheaders=""
         [ -f "$webhook_body_file" ] && wbody="$(cat "$webhook_body_file" 2>/dev/null)"
         [ -f "$webhook_headers_file" ] && wheaders="$(cat "$webhook_headers_file" 2>/dev/null)"
-        printf '{"threshold":%s,"window":%s,"web_patterns":"%s","ssh_patterns":"%s","extra_patterns":"%s","bark_enabled":%s,"notify_enabled":%s,"notify_type":"%s","bark_server":"%s","bark_template":"%s","bark_custom_template":"%s","webhook_url":"%s","webhook_method":"%s","webhook_content_type":"%s","webhook_title":"%s","webhook_timeout":%s,"webhook_insecure":%s,"webhook_body":"%s","webhook_headers":"%s","login_button":%s}\n' \
-                "$threshold" "$window" \
+        printf '{"threshold":%s,"window":%s,"backend":"%s","ban_time":%s,"web_patterns":"%s","ssh_patterns":"%s","extra_patterns":"%s","bark_enabled":%s,"notify_enabled":%s,"notify_type":"%s","bark_server":"%s","bark_template":"%s","bark_custom_template":"%s","webhook_url":"%s","webhook_method":"%s","webhook_content_type":"%s","webhook_title":"%s","webhook_timeout":%s,"webhook_insecure":%s,"webhook_body":"%s","webhook_headers":"%s","login_button":%s}\n' \
+                "$threshold" "$window" "${backend:-auto}" "${ban_time:-0}" \
                 "$(printf '%s' "$web_patterns" | json_escape)" "$(printf '%s' "$ssh_patterns" | json_escape)" "$(printf '%s' "$extra_patterns" | json_escape)" \
                 "${notify_enabled:-0}" "${notify_enabled:-0}" "$(printf '%s' "${notify_type:-bark}" | json_escape)" \
                 "$(printf '%s' "$bark_server" | json_escape)" "$(printf '%s' "$bark_template" | json_escape)" "$(printf '%s' "$bark_custom_template" | json_escape)" \
@@ -687,7 +776,7 @@ record_attempt() {
 }
 
 cmd_daemon() {
-        load_cfg; mkdirs; ensure_backend || exit 1; restore_banlist; ensure_public_index
+        load_cfg; mkdirs; ensure_backend || exit 1; prune_expired >/dev/null 2>&1; restore_banlist; ensure_public_index
         [ "$enabled" = "1" ] || exit 0
         rm -f "$RUNTIME_FIFO"; mkfifo "$RUNTIME_FIFO" || exit 1
         logread -f > "$RUNTIME_FIFO" &
@@ -699,6 +788,14 @@ cmd_daemon() {
                 ip="$(extract_ip "$line")"
                 valid_ip4 "$ip" || continue
                 ip_in_cidr_whitelist "$ip" && continue
+                # 长时运行下定期清理过期记录，避免过期 IP 永久卡在「已封禁」
+                if [ "${ban_time:-0}" -gt 0 ] 2>/dev/null; then
+                        now_s=$(date +%s)
+                        if [ $((now_s - ${last_prune:-0})) -ge 300 ]; then
+                                prune_expired >/dev/null 2>&1
+                                last_prune=$now_s
+                        fi
+                fi
                 is_banned_file "$ip" && continue
                 count="$(record_attempt "$ip")"
                 if [ "${count:-0}" -ge "${threshold:-20}" ]; then
@@ -721,7 +818,7 @@ cmd_stop() {
         return 0
 }
 
-cmd_reload() { load_cfg; mkdirs; ensure_backend; restore_banlist; update_public; echo reloaded; }
+cmd_reload() { load_cfg; mkdirs; ensure_backend; prune_expired >/dev/null 2>&1; restore_banlist; update_public; echo reloaded; }
 
 cmd_set_enabled() {
         local v="$1"; [ "$v" = "1" ] || v=0
@@ -737,6 +834,7 @@ cmd_set_autostart() {
 
 cmd_save_config() {
         local th="$1" win="$2" web="$3" ssh="$4" extra="$5" be="$6" bs="$7" bt="$8" bc="$9"
+        local new_backend="${10:-}" new_ban_time="${11:-}"
         validate_step10 threshold "$th" || exit 1
         validate_step10 window "$win" || exit 1
         uci -q set blockadeip.main.threshold="$th"
@@ -751,9 +849,57 @@ cmd_save_config() {
                 uci -q set blockadeip.push.template="$bt"
                 uci -q set blockadeip.push.custom_template="$bc"
         fi
+        if [ -n "$new_backend" ]; then
+                ensure_backend_cfg "$new_backend" || exit 1
+                uci -q set blockadeip.main.backend="$new_backend"
+        fi
+        if [ -n "$new_ban_time" ]; then
+                case "$new_ban_time" in ''|*[!0-9]*) echo "ban_time must be number" >&2; exit 1 ;; esac
+                uci -q set blockadeip.main.ban_time="$new_ban_time"
+        fi
         uci commit blockadeip
         /etc/init.d/blockadeip restart >/dev/null 2>&1 || true
         echo saved
+}
+
+# 校验后端取值与依赖；不满足时返回非 0 并输出安装提示
+ensure_backend_cfg() {
+        case "$1" in
+                auto) return 0 ;;
+                nft)
+                        command -v nft >/dev/null 2>&1 || {
+                                echo "缺少依赖，请先执行：opkg update && opkg install nftables-json" >&2
+                                return 1
+                        }
+                        return 0
+                        ;;
+                ipset)
+                        if ! command -v ipset >/dev/null 2>&1 || ! command -v iptables >/dev/null 2>&1; then
+                                echo "缺少依赖，请先执行：opkg update && opkg install ipset iptables" >&2
+                                return 1
+                        fi
+                        return 0
+                        ;;
+                *)
+                        echo "invalid backend: $1" >&2
+                        return 1
+                        ;;
+        esac
+}
+
+cmd_save_backend() {
+        local want="$1" rt
+        load_cfg; mkdirs
+        ensure_backend_cfg "$want" || exit 1
+        uci -q set blockadeip.main.backend="$want"
+        uci commit blockadeip
+        # 切换前清理旧后端残余，避免新旧两套规则同时生效
+        load_cfg
+        ensure_backend >/dev/null 2>&1 || true
+        rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"
+        [ -n "$rt" ] && cleanup_stale_backend "$rt"
+        /etc/init.d/blockadeip restart >/dev/null 2>&1 || true
+        echo "backend set to $want"
 }
 
 cmd_simulate() {
@@ -876,6 +1022,7 @@ case "$1" in
         set-enabled) shift; cmd_set_enabled "$@" ;;
         set-autostart) shift; cmd_set_autostart "$@" ;;
         save-config) shift; cmd_save_config "$@" ;;
+        save-backend) shift; cmd_save_backend "$@" ;;
         save-notify) shift; cmd_save_notify "$@" ;;
         simulate) shift; cmd_simulate "$@" ;;
         clear-logs) cmd_clear_logs ;;
@@ -887,5 +1034,5 @@ case "$1" in
         config-json) cmd_config_json ;;
         public) update_public ;;
         daemon) cmd_daemon ;;
-        *) echo "Usage: blockadeip {init|add|del|flush|stop|reload|set-config|set-enabled|set-autostart|save-config|save-notify|simulate|status-json|banlist-json|logs-json|config-json|clear-logs|notify-test|bark-test|login-button|public|daemon}" >&2; exit 1 ;;
+        *) echo "Usage: blockadeip {init|add|del|flush|stop|reload|set-config|set-enabled|set-autostart|save-config|save-backend|save-notify|simulate|status-json|banlist-json|logs-json|config-json|clear-logs|notify-test|bark-test|login-button|public|daemon}" >&2; exit 1 ;;
 esac
