@@ -14,10 +14,11 @@ var callReload = rpc.declare({ object: 'blockadeip', method: 'reload', expect: {
 var callPublic = rpc.declare({ object: 'blockadeip', method: 'public', expect: { '': {} } });
 var callSetEnabled = rpc.declare({ object: 'blockadeip', method: 'set_enabled', params: [ 'enabled' ], expect: { '': {} } });
 var callSetAutostart = rpc.declare({ object: 'blockadeip', method: 'set_autostart', params: [ 'enabled' ], expect: { '': {} } });
-var callSaveConfig = rpc.declare({ object: 'blockadeip', method: 'save_config', params: [ 'threshold', 'window', 'web_patterns', 'ssh_patterns', 'extra_patterns', 'bark_enabled', 'bark_server', 'bark_template', 'bark_custom_template' ], expect: { '': {} } });
+var callSaveConfig = rpc.declare({ object: 'blockadeip', method: 'save_config', params: [ 'threshold', 'window', 'web_patterns', 'ssh_patterns', 'extra_patterns' ], expect: { '': {} } });
+var callSaveNotify = rpc.declare({ object: 'blockadeip', method: 'save_notify', params: [ 'enabled', 'type', 'bark_server', 'template', 'custom_template', 'webhook_url', 'webhook_method', 'webhook_content_type', 'webhook_title', 'webhook_timeout', 'webhook_insecure', 'webhook_body', 'webhook_headers' ], expect: { '': {} } });
 var callSimulate = rpc.declare({ object: 'blockadeip', method: 'simulate', params: [ 'ip' ], expect: { '': {} } });
 var callClearLogs = rpc.declare({ object: 'blockadeip', method: 'clear_logs', expect: { '': {} } });
-var callBarkTest = rpc.declare({ object: 'blockadeip', method: 'bark_test', expect: { '': {} } });
+var callTestNotify = rpc.declare({ object: 'blockadeip', method: 'test_notify', expect: { '': {} } });
 var callLoginButton = rpc.declare({ object: 'blockadeip', method: 'login_button', params: [ 'action' ], expect: { '': {} } });
 
 function notify(res) {
@@ -71,8 +72,14 @@ return view.extend({
     var sshPatterns = E('textarea', { 'class': 'cbi-input-textarea', 'style': 'width:100%;min-height:70px;' }, cfg.ssh_patterns || '');
     var extraPatterns = E('textarea', { 'class': 'cbi-input-textarea', 'style': 'width:100%;min-height:70px;' }, cfg.extra_patterns || '');
 
-    var barkEnabled = E('input', { type: 'checkbox' });
-    barkEnabled.checked = String(cfg.bark_enabled || '0') === '1';
+    var notifyEnabled = E('input', { type: 'checkbox' });
+    notifyEnabled.checked = String(cfg.notify_enabled || cfg.bark_enabled || '0') === '1';
+    var notifyType = E('select', { 'class': 'cbi-input-select' }, [
+      E('option', { value: 'bark' }, 'Bark'),
+      E('option', { value: 'webhook' }, 'Webhook（自定义）')
+    ]);
+    notifyType.value = cfg.notify_type || 'bark';
+
     var barkServer = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': cfg.bark_server || '', 'style': 'width:100%;', 'placeholder': '例如 https://api.day.app/你的Key' });
     var barkTemplate = E('select', { 'class': 'cbi-input-select' }, [
       E('option', { value: 'simple' }, '精简模板'),
@@ -88,15 +95,73 @@ return view.extend({
     barkCustom.addEventListener('input', refreshBarkPreview);
     setTimeout(refreshBarkPreview, 0);
 
-    function saveAllConfig() {
+    var whUrl = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': cfg.webhook_url || '', 'style': 'width:100%;', 'placeholder': '例如 https://example.com/hook' });
+    var whMethod = E('select', { 'class': 'cbi-input-select' }, [ 'POST', 'GET', 'PUT', 'PATCH', 'DELETE' ].map(function(m){ return E('option', { value: m }, m); }));
+    whMethod.value = cfg.webhook_method || 'POST';
+    var whCtype = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': cfg.webhook_content_type || 'application/json', 'style': 'width:100%;' });
+    var whTitle = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': cfg.webhook_title || 'BlockadeIP 安全拦截', 'style': 'width:100%;' });
+    var whTimeout = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'min': '1', 'value': cfg.webhook_timeout || 8, 'style': 'width:110px;' });
+    var whInsecure = E('input', { type: 'checkbox' });
+    whInsecure.checked = String(cfg.webhook_insecure || '0') === '1';
+    var whBody = E('textarea', { 'class': 'cbi-input-textarea', 'style': 'width:100%;min-height:110px;font-family:monospace;' }, cfg.webhook_body || '{"title":"{title}","ip":"{ip}","reason":"{reason}","count":{count},"time":"{time}"}');
+    var whHeaders = E('textarea', { 'class': 'cbi-input-textarea', 'style': 'width:100%;min-height:80px;font-family:monospace;', 'placeholder': '每行一个 Header，例如：\nAuthorization: Bearer xxxxx' }, cfg.webhook_headers || '');
+    var whPreview = E('pre', { 'class': 'bip-preview' }, '');
+    function webhookPreview() {
+      var ip = '203.0.113.200', reason = '模拟测试封禁', count = '20', time = '2026-05-21 23:59:59', title = whTitle.value || 'BlockadeIP 安全拦截';
+      var payload = JSON.stringify({ title: title, ip: ip, reason: reason, count: Number(count), time: time });
+      return String(whBody.value || '').split('{ip_json}').join(ip).split('{reason_json}').join(reason).split('{time_json}').join(time).split('{title_json}').join(title)
+        .split('{ip_url}').join(ip).split('{reason_url}').join(encodeURIComponent(reason)).split('{time_url}').join(encodeURIComponent(time)).split('{title_url}').join(encodeURIComponent(title))
+        .split('{json}').join(payload).split('{ip}').join(ip).split('{reason}').join(reason).split('{count}').join(count).split('{time}').join(time).split('{title}').join(title);
+    }
+    function refreshWhPreview(){ whPreview.textContent = webhookPreview(); }
+    whBody.addEventListener('input', refreshWhPreview);
+    whTitle.addEventListener('input', refreshWhPreview);
+    setTimeout(refreshWhPreview, 0);
+
+    var barkBox = E('div', {}, [ E('table', { 'class': 'table' }, [
+      statusRow('Bark 服务器地址', barkServer),
+      statusRow('内容模板', barkTemplate),
+      statusRow('模板预览', barkPreview),
+      statusRow('自定义模板', barkCustom)
+    ]) ]);
+    var whBox = E('div', { style: 'display:none;' }, [ E('table', { 'class': 'table' }, [
+      statusRow('Webhook URL', whUrl),
+      statusRow('请求方法', whMethod),
+      statusRow('Content-Type', whCtype),
+      statusRow('通知标题', whTitle),
+      statusRow('超时（秒）', whTimeout),
+      statusRow('跳过证书校验', E('label', {}, [ whInsecure, ' 忽略 HTTPS 证书错误（需要 ca-bundle 时建议保持关闭）' ])),
+      statusRow('Headers（每行一个）', whHeaders),
+      statusRow('Body 模板', whBody),
+      statusRow('Body 预览', whPreview)
+    ]) ]);
+    function syncNotifyType() {
+      var isWh = notifyType.value === 'webhook';
+      barkBox.style.display = isWh ? 'none' : '';
+      whBox.style.display = isWh ? '' : 'none';
+    }
+    notifyType.addEventListener('change', syncNotifyType);
+    syncNotifyType();
+
+    function saveRules() {
       if (!isStep10(thresholdInput.value) || !isStep10(windowInput.value)) {
         ui.addNotification(null, E('p', {}, '检测窗口和触发阈值必须是 10 的整数倍'), 'warning');
         return Promise.resolve();
       }
-      return callSaveConfig(String(thresholdInput.value), String(windowInput.value), webPatterns.value, sshPatterns.value, extraPatterns.value, barkEnabled.checked ? '1' : '0', barkServer.value, barkTemplate.value, barkCustom.value).then(function(res){
+      return callSaveConfig(String(thresholdInput.value), String(windowInput.value), webPatterns.value, sshPatterns.value, extraPatterns.value).then(function(res){
         notify(res);
         return res;
       });
+    }
+
+    function saveNotify() {
+      return callSaveNotify(
+        notifyEnabled.checked ? '1' : '0', notifyType.value,
+        barkServer.value, barkTemplate.value, barkCustom.value,
+        whUrl.value, whMethod.value, whCtype.value, whTitle.value,
+        String(whTimeout.value || 8), whInsecure.checked ? '1' : '0',
+        whBody.value, whHeaders.value
+      ).then(function(res){ notify(res); return res; });
     }
 
     var enableBox = E('input', { type: 'checkbox', title: '启用或停用 BlockadeIP 实时监听服务' });
@@ -154,7 +219,7 @@ return view.extend({
 
     var rules = E('div', { id: 'tab-rules', 'class': 'bip-tab', style: 'display:none' }, [
       section('触发阈值', [ E('div', { 'class': 'bip-actions' }, [ '检测窗口：', windowInput, ' 秒　触发阈值：', thresholdInput, ' 次　',
-        E('button', { 'class': 'btn cbi-button cbi-button-apply', title: '保存检测窗口和失败次数，数值必须为 10 的整数倍', 'click': function(){ saveAllConfig(); } }, '保存配置'),
+        E('button', { 'class': 'btn cbi-button cbi-button-apply', title: '保存检测窗口和失败次数，数值必须为 10 的整数倍', 'click': function(){ saveRules(); } }, '保存配置'),
         E('button', { 'class': 'btn cbi-button cbi-button-action', title: '输入模拟 IP 后，按当前触发阈值写入对应次数的失败日志，并直接执行封禁验证', 'click': function(){ var ip = prompt('请输入需要模拟测试封的公网 IP'); if(!ip) return; callSimulate(ip).then(function(res){ notify(res); setTimeout(function(){ reloadHere(); }, 1200); }); } }, '模拟测试封')
       ]) ]),
       section('攻击特征匹配关键词', [
@@ -166,18 +231,18 @@ return view.extend({
     ]);
 
     var bark = E('div', { id: 'tab-bark', 'class': 'bip-tab', style: 'display:none' }, [
-      section('Bark 推送', [
-        E('p', { 'class': 'bip-note' }, '封禁新 IP 时触发 Bark 推送。填写服务器地址后可先点击“测试推送”。'),
+      section('通知推送', [
+        E('p', { 'class': 'bip-note' }, '封禁新 IP 时触发通知。选择 Bark 或自定义 Webhook，保存后可先点击“测试推送”。'),
         E('table', { 'class': 'table' }, [
-          statusRow('启用推送', E('label', {}, [ barkEnabled, ' 启用' ])),
-          statusRow('服务器地址', barkServer),
-          statusRow('内容模板', barkTemplate),
-          statusRow('模板预览', barkPreview),
-          statusRow('自定义模板', barkCustom)
+          statusRow('启用推送', E('label', {}, [ notifyEnabled, ' 启用' ])),
+          statusRow('推送方式', notifyType)
         ]),
+        barkBox,
+        whBox,
+        E('p', { 'class': 'bip-note' }, 'Body / Headers 支持占位符：{ip} {reason} {count} {time} {title}，以及 {ip_json} {reason_json} {time_json} {title_json} {ip_url} {reason_url} {time_url} {title_url} {json}。'),
         E('div', { 'class': 'bip-actions' }, [
-          E('button', { 'class': 'btn cbi-button cbi-button-apply', title: '保存 Bark 服务器、启用状态和模板设置', 'click': function(){ saveAllConfig(); } }, '保存配置'),
-          E('button', { 'class': 'btn cbi-button cbi-button-action', title: '向 Bark 服务器发送一条默认测试推送', 'click': function(){ saveAllConfig().then(function(){ return callBarkTest(); }).then(function(res){ notify(res); }); } }, '测试推送')
+          E('button', { 'class': 'btn cbi-button cbi-button-apply', title: '保存通知方式、服务器地址、模板与 Webhook 设置', 'click': function(){ saveNotify(); } }, '保存配置'),
+          E('button', { 'class': 'btn cbi-button cbi-button-action', title: '按当前配置发送一条测试通知', 'click': function(){ saveNotify().then(function(){ return callTestNotify(); }).then(function(res){ notify(res); }); } }, '测试推送')
         ])
       ])
     ]);
@@ -207,7 +272,7 @@ return view.extend({
     var root = E('div', { 'class': 'cbi-map' }, [
       css,
       E('h2', {}, 'SSH安全卫士 / BlockadeIP'),
-      E('div', { style: 'margin:12px 0 18px 0;' }, [ tabButton('概览', 'tab-overview'), tabButton('封禁管理', 'tab-manage'), tabButton('规则配置', 'tab-rules'), tabButton('Bark推送', 'tab-bark'), tabButton('公开页设置', 'tab-public'), tabButton('日志记录', 'tab-logs') ]),
+      E('div', { style: 'margin:12px 0 18px 0;' }, [ tabButton('概览', 'tab-overview'), tabButton('封禁管理', 'tab-manage'), tabButton('规则配置', 'tab-rules'), tabButton('通知推送', 'tab-bark'), tabButton('公开页设置', 'tab-public'), tabButton('日志记录', 'tab-logs') ]),
       overview, manage, rules, bark, publicTab, logtab
     ]);
     setTimeout(function(){ activateTab((window.location.hash || '#tab-overview').replace('#','')); }, 0);

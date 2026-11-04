@@ -11,8 +11,8 @@ LOCK_DIR="$STATE_DIR/lock"
 BANLIST="/etc/blockadeip/banlist"
 RECORDS="/etc/blockadeip/records.tsv"
 LOG_PATH="/etc/blockadeip/blockadeip.log"
-VERSION="1.4.3"
-CHANGELOG="V1.4.3: 固化已验证的 rpcd 层 banlist_json 修复，避免 LuCI 封禁列表空白；固化 Argon 登录页按钮插入位置与实测 CSS。V1.4.2: 修复已封禁列表原因列显示英文、修复 banlist-json JSON 输出异常、登录页按钮严格按实测样式注入。V1.4.1: 修复Bark提示堆叠、Bark换行显示、已封禁列表为空、表格排版细节。V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
+VERSION="1.5.0"
+CHANGELOG="V1.5.0: 通知层抽象，新增通用 Webhook 推送，支持自定义 URL、请求方法、Headers、Body 与 {ip}{reason}{count}{time}{title} 及 JSON/URL 编码变体；Bark 配置保持向后兼容；通知发送移出封禁锁避免阻塞封禁；新增通知测试与模板文件。V1.4.3: 固化已验证的 rpcd 层 banlist_json 修复，避免 LuCI 封禁列表空白；固化 Argon 登录页按钮插入位置与实测 CSS。V1.4.2: 修复已封禁列表原因列显示英文、修复 banlist-json JSON 输出异常、登录页按钮严格按实测样式注入。V1.4.1: 修复Bark提示堆叠、Bark换行显示、已封禁列表为空、表格排版细节。V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
 REPO_URL="https://github.com/sogbtt/openwrt-blockadeip-ipk"
 
 mkdirs() {
@@ -42,14 +42,25 @@ load_cfg() {
         config_get ssh_patterns main ssh_patterns 'bad password|Failed password|invalid user|Exit before auth|authentication failure|dropbear|sshd'
         config_get extra_patterns main extra_patterns ''
         config_get login_button main login_button 1
-        config_get bark_enabled push enabled ''
-        [ -n "$bark_enabled" ] || config_get bark_enabled bark enabled 0
+        # 通知配置统一读取 section 名 push，兼容旧的 config bark 'push'
+        config_get notify_enabled push enabled ''
+        [ -n "$notify_enabled" ] || config_get notify_enabled bark enabled 0
+        config_get notify_type push type ''
+        [ -n "$notify_type" ] || config_get notify_type bark type bark
         config_get bark_server push server ''
         [ -n "$bark_server" ] || config_get bark_server bark server ''
         config_get bark_template push template ''
         [ -n "$bark_template" ] || config_get bark_template bark template simple
         config_get bark_custom_template push custom_template ''
         [ -n "$bark_custom_template" ] || config_get bark_custom_template bark custom_template '【BlockadeIP】已封禁 {ip}，原因：{reason}，次数：{count}，时间：{time}'
+        config_get webhook_url push webhook_url ''
+        config_get webhook_method push webhook_method POST
+        config_get webhook_content_type push webhook_content_type 'application/json'
+        config_get webhook_title push webhook_title 'BlockadeIP 安全拦截'
+        config_get webhook_timeout push webhook_timeout 8
+        config_get webhook_insecure push webhook_insecure 0
+        config_get webhook_body_file push webhook_body_file /etc/blockadeip/webhook.body
+        config_get webhook_headers_file push webhook_headers_file /etc/blockadeip/webhook.headers
         LOG_PATH="$log_path"
         RECORDS="$records_path"
         [ "$version" = "$VERSION" ] || version="$VERSION"
@@ -61,7 +72,9 @@ ensure_config_defaults() {
         uci -q set blockadeip.main.repo_url="$REPO_URL"
         uci -q set blockadeip.main.changelog="$CHANGELOG"
         [ -n "$(uci -q get blockadeip.main.login_button 2>/dev/null)" ] || uci -q set blockadeip.main.login_button='1'
-        uci -q get blockadeip.push >/dev/null 2>&1 || uci -q set blockadeip.push=bark
+        # 只在完全缺失时创建通知 section，不覆盖用户已选的 type
+        uci -q get blockadeip.push >/dev/null 2>&1 || uci -q set blockadeip.push=notify
+        uci -q get blockadeip.push.type >/dev/null 2>&1 || uci -q set blockadeip.push.type='bark'
         uci -q commit blockadeip
 }
 
@@ -167,7 +180,6 @@ log_event() {
         local action="$1" ip="$2" count="${3:-0}" reason="${4:-manual}" ts
         ts="$(now_time)"
         echo "$ts $action $ip count=$count reason=$reason" >> "$LOG_PATH"
-        [ "$action" = "ban" ] && bark_push "$ip" "$count" "$reason" "$ts"
 }
 
 record_active() {
@@ -285,29 +297,147 @@ bark_template_body() {
         esac
         printf '%s' "$body"
 }
+sed_esc() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
+
+urlencode() {
+        printf '%s' "$1" | awk '
+        BEGIN { for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i }
+        {
+                out = ""
+                for (i = 1; i <= length($0); i++) {
+                        c = substr($0, i, 1)
+                        if (c ~ /[A-Za-z0-9._~-]/) out = out c
+                        else out = out sprintf("%%%02X", ord[c])
+                }
+                print out
+        }'
+}
+
+json_escape_ml() {
+        awk 'BEGIN{ORS=""} {
+                gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); gsub(/\t/,"\\t"); gsub(/\r/,"");
+                if (NR > 1) printf "\\n";
+                printf "%s", $0
+        }'
+}
+
+render_tpl() {
+        local tpl="$1" ip="$2" count="$3" reason="$4" ts="$5" title="$6"
+        local ip_j reason_j ts_j title_j ip_u reason_u ts_u title_u payload
+        ip_j="$(printf '%s' "$ip" | json_escape)"
+        reason_j="$(printf '%s' "$reason" | json_escape)"
+        ts_j="$(printf '%s' "$ts" | json_escape)"
+        title_j="$(printf '%s' "$title" | json_escape)"
+        ip_u="$(urlencode "$ip")"
+        reason_u="$(urlencode "$reason")"
+        ts_u="$(urlencode "$ts")"
+        title_u="$(urlencode "$title")"
+        payload="{\"title\":\"$title_j\",\"ip\":\"$ip_j\",\"reason\":\"$reason_j\",\"count\":${count:-0},\"time\":\"$ts_j\"}"
+        printf '%s' "$tpl" | sed \
+                -e "s|{ip_json}|$(sed_esc "$ip_j")|g" \
+                -e "s|{reason_json}|$(sed_esc "$reason_j")|g" \
+                -e "s|{time_json}|$(sed_esc "$ts_j")|g" \
+                -e "s|{title_json}|$(sed_esc "$title_j")|g" \
+                -e "s|{ip_url}|$(sed_esc "$ip_u")|g" \
+                -e "s|{reason_url}|$(sed_esc "$reason_u")|g" \
+                -e "s|{time_url}|$(sed_esc "$ts_u")|g" \
+                -e "s|{title_url}|$(sed_esc "$title_u")|g" \
+                -e "s|{json}|$(sed_esc "$payload")|g" \
+                -e "s|{ip}|$(sed_esc "$ip")|g" \
+                -e "s|{reason}|$(sed_esc "$reason")|g" \
+                -e "s|{count}|$(sed_esc "${count:-0}")|g" \
+                -e "s|{time}|$(sed_esc "$ts")|g" \
+                -e "s|{title}|$(sed_esc "$title")|g"
+}
+
+http_request() {
+        local url="$1" method="$2" body="$3" headers_file="$4" ctype="$5"
+        local timeout="${webhook_timeout:-8}" insecure="${webhook_insecure:-0}" h
+        [ -n "$url" ] || return 1
+        [ -n "$method" ] || method=POST
+        if command -v uclient-fetch >/dev/null 2>&1 && uclient-fetch -h 2>&1 | grep -q -- '--body-data'; then
+                set -- -q -T "$timeout" -O /dev/null
+                [ -n "$method" ] && set -- "$@" --method "$method"
+                [ -n "$body" ] && set -- "$@" --body-data "$body"
+                [ -n "$ctype" ] && set -- "$@" --content-type "$ctype"
+                [ "$insecure" = "1" ] && set -- "$@" --no-check-certificate
+                if [ -n "$headers_file" ] && [ -f "$headers_file" ]; then
+                        while IFS= read -r h; do
+                                [ -n "$h" ] && set -- "$@" --header "$h"
+                        done < "$headers_file"
+                fi
+                uclient-fetch "$@" "$url" >/dev/null 2>&1
+                return $?
+        fi
+        if command -v curl >/dev/null 2>&1; then
+                set -- -fsS --max-time "$timeout" -o /dev/null -X "$method"
+                [ -n "$body" ] && set -- "$@" --data-binary "$body"
+                [ -n "$ctype" ] && set -- "$@" -H "Content-Type: $ctype"
+                [ "$insecure" = "1" ] && set -- "$@" -k
+                if [ -n "$headers_file" ] && [ -f "$headers_file" ]; then
+                        while IFS= read -r h; do
+                                [ -n "$h" ] && set -- "$@" -H "$h"
+                        done < "$headers_file"
+                fi
+                curl "$@" "$url" >/dev/null 2>&1
+                return $?
+        fi
+        if command -v wget >/dev/null 2>&1; then
+                set -- -q -T "$timeout" -O /dev/null
+                [ -n "$ctype" ] && set -- "$@" "--header=Content-Type: $ctype"
+                if [ -n "$headers_file" ] && [ -f "$headers_file" ]; then
+                        while IFS= read -r h; do
+                                [ -n "$h" ] && set -- "$@" "--header=$h"
+                        done < "$headers_file"
+                fi
+                [ -n "$body" ] && set -- "$@" "--post-data=$body"
+                wget "$@" "$url" >/dev/null 2>&1
+                return $?
+        fi
+        return 1
+}
+
 bark_send() {
-        local title="$1" body="$2" url enc_title enc_body
+        local title="$1" body="$2" url
         [ -n "$bark_server" ] || return 1
-        enc_title=$(printf '%s' "$title" | sed 's/ /%20/g; s/#/%23/g; s/?/%3F/g; s/&/%26/g')
-        enc_body=$(printf '%s' "$body" | sed 's/ /%20/g; s/#/%23/g; s/?/%3F/g; s/&/%26/g')
-        url="${bark_server%/}/$enc_title/$enc_body"
-        wget -q -T 5 -O /dev/null "$url" >/dev/null 2>&1
+        url="${bark_server%/}/$(urlencode "$title")/$(urlencode "$body")"
+        http_request "$url" GET '' '' ''
 }
 
 bark_push() {
-        load_cfg
-        [ "${bark_enabled:-0}" = "1" ] || return 0
-        [ -n "$bark_server" ] || return 0
         local ip="$1" count="$2" reason="$3" ts="$4" body
+        [ -n "$bark_server" ] || return 0
         body="$(bark_template_body "$ip" "$count" "$reason" "$ts")"
         bark_send "BlockadeIP 安全拦截" "$body" || true
+}
+
+webhook_send() {
+        local ip="$1" count="$2" reason="$3" ts="$4"
+        local title body tpl
+        [ -n "$webhook_url" ] || return 1
+        title="${webhook_title:-BlockadeIP 安全拦截}"
+        tpl=""
+        [ -f "$webhook_body_file" ] && tpl="$(cat "$webhook_body_file" 2>/dev/null)"
+        [ -n "$tpl" ] || tpl='{"title":"{title}","ip":"{ip}","reason":"{reason}","count":{count},"time":"{time}"}'
+        body="$(render_tpl "$tpl" "$ip" "$count" "$(label_reason "$reason")" "$ts" "$title")"
+        http_request "$webhook_url" "${webhook_method:-POST}" "$body" "$webhook_headers_file" "$webhook_content_type"
+}
+
+notify_push() {
+        load_cfg
+        [ "${notify_enabled:-0}" = "1" ] || return 0
+        case "${notify_type:-bark}" in
+                webhook) webhook_send "$@" ;;
+                bark) bark_push "$@" ;;
+                *) return 0 ;;
+        esac
 }
 
 cmd_init() { ensure_config_defaults; load_cfg; mkdirs; ensure_backend || exit 1; restore_banlist; ensure_public_index; ensure_login_button; }
 
 cmd_add() {
         load_cfg; mkdirs; ensure_backend || exit 1
-        local ip="$1" count="${2:-0}" reason="${3:-manual}"
+        local ip="$1" count="${2:-0}" reason="${3:-manual}" ts
         valid_ip4 "$ip" || { echo "invalid ip" >&2; exit 1; }
         ip_in_cidr_whitelist "$ip" && { echo "protected ip or lan subnet: $ip" >&2; exit 2; }
         lock_acquire || { echo "lock timeout" >&2; exit 1; }
@@ -317,12 +447,15 @@ cmd_add() {
                 echo "already banned $ip"
                 return 0
         fi
+        ts="$(now_time)"
         backend_add "$ip"
         echo "$ip" >> "$BANLIST"
         sort -u "$BANLIST" -o "$BANLIST" 2>/dev/null || true
         record_active "$ip" "$count" "$reason"
         log_event ban "$ip" "$count" "$reason"
         lock_release
+        # 通知在释放封禁锁之后发送，HTTP 超时不会阻塞并发封禁
+        notify_push "$ip" "$count" "$reason" "$ts" >/dev/null 2>&1 || true
         update_public
         logger -t blockadeip "banned $ip"
         echo "banned $ip"
@@ -437,10 +570,18 @@ cmd_logs_json() {
 
 cmd_config_json() {
         load_cfg
-        printf '{"threshold":%s,"window":%s,"web_patterns":"%s","ssh_patterns":"%s","extra_patterns":"%s","bark_enabled":%s,"bark_server":"%s","bark_template":"%s","bark_custom_template":"%s","login_button":%s}\n' \
+        local wbody="" wheaders=""
+        [ -f "$webhook_body_file" ] && wbody="$(cat "$webhook_body_file" 2>/dev/null)"
+        [ -f "$webhook_headers_file" ] && wheaders="$(cat "$webhook_headers_file" 2>/dev/null)"
+        printf '{"threshold":%s,"window":%s,"web_patterns":"%s","ssh_patterns":"%s","extra_patterns":"%s","bark_enabled":%s,"notify_enabled":%s,"notify_type":"%s","bark_server":"%s","bark_template":"%s","bark_custom_template":"%s","webhook_url":"%s","webhook_method":"%s","webhook_content_type":"%s","webhook_title":"%s","webhook_timeout":%s,"webhook_insecure":%s,"webhook_body":"%s","webhook_headers":"%s","login_button":%s}\n' \
                 "$threshold" "$window" \
                 "$(printf '%s' "$web_patterns" | json_escape)" "$(printf '%s' "$ssh_patterns" | json_escape)" "$(printf '%s' "$extra_patterns" | json_escape)" \
-                "${bark_enabled:-0}" "$(printf '%s' "$bark_server" | json_escape)" "$(printf '%s' "$bark_template" | json_escape)" "$(printf '%s' "$bark_custom_template" | json_escape)" "${login_button:-1}"
+                "${notify_enabled:-0}" "${notify_enabled:-0}" "$(printf '%s' "${notify_type:-bark}" | json_escape)" \
+                "$(printf '%s' "$bark_server" | json_escape)" "$(printf '%s' "$bark_template" | json_escape)" "$(printf '%s' "$bark_custom_template" | json_escape)" \
+                "$(printf '%s' "$webhook_url" | json_escape)" "$(printf '%s' "${webhook_method:-POST}" | json_escape)" \
+                "$(printf '%s' "$webhook_content_type" | json_escape)" "$(printf '%s' "$webhook_title" | json_escape)" \
+                "${webhook_timeout:-8}" "${webhook_insecure:-0}" \
+                "$(printf '%s' "$wbody" | json_escape_ml)" "$(printf '%s' "$wheaders" | json_escape_ml)" "${login_button:-1}"
 }
 
 
@@ -524,11 +665,13 @@ cmd_save_config() {
         uci -q set blockadeip.main.web_patterns="$web"
         uci -q set blockadeip.main.ssh_patterns="$ssh"
         uci -q set blockadeip.main.extra_patterns="$extra"
-        uci -q set blockadeip.push=bark
-        uci -q set blockadeip.push.enabled="$be"
-        uci -q set blockadeip.push.server="$bs"
-        uci -q set blockadeip.push.template="$bt"
-        uci -q set blockadeip.push.custom_template="$bc"
+        # 兼容旧前端：只有显式传入 Bark 字段时才写入，避免规则页保存时清空通知配置
+        if [ -n "$be$bs$bt$bc" ]; then
+                uci -q set blockadeip.push.enabled="$be"
+                uci -q set blockadeip.push.server="$bs"
+                uci -q set blockadeip.push.template="$bt"
+                uci -q set blockadeip.push.custom_template="$bc"
+        fi
         uci commit blockadeip
         /etc/init.d/blockadeip restart >/dev/null 2>&1 || true
         echo saved
@@ -552,14 +695,54 @@ cmd_clear_logs() {
         echo "logs cleared"
 }
 
-cmd_bark_test() {
+cmd_save_notify() {
+        local enabled="$1" ntype="$2" bserver="$3" btpl="$4" bcustom="$5"
+        local wurl="$6" wmethod="$7" wctype="$8" wbody="$9" wheaders="${10}"
+        local wtimeout="${11}" winsecure="${12}" wtitle="${13}"
+        [ "$enabled" = "1" ] || enabled=0
+        case "$ntype" in webhook|bark) ;; *) ntype=bark ;; esac
+        case "$wmethod" in GET|POST|PUT|PATCH|DELETE) ;; *) wmethod=POST ;; esac
+        case "$wtimeout" in ''|*[!0-9]*) wtimeout=8 ;; esac
+        [ "$winsecure" = "1" ] || winsecure=0
+        uci -q set blockadeip.push.enabled="$enabled"
+        uci -q set blockadeip.push.type="$ntype"
+        uci -q set blockadeip.push.server="$bserver"
+        uci -q set blockadeip.push.template="$btpl"
+        uci -q set blockadeip.push.custom_template="$bcustom"
+        uci -q set blockadeip.push.webhook_url="$wurl"
+        uci -q set blockadeip.push.webhook_method="$wmethod"
+        uci -q set blockadeip.push.webhook_content_type="$wctype"
+        uci -q set blockadeip.push.webhook_title="$wtitle"
+        uci -q set blockadeip.push.webhook_timeout="$wtimeout"
+        uci -q set blockadeip.push.webhook_insecure="$winsecure"
+        uci -q commit blockadeip
+        mkdirs
+        printf '%s' "$wbody" > "$webhook_body_file" 2>/dev/null
+        printf '%s' "$wheaders" > "$webhook_headers_file" 2>/dev/null
+        chmod 600 "$webhook_body_file" "$webhook_headers_file" 2>/dev/null
+        echo saved
+}
+
+cmd_notify_test() {
         load_cfg
-        [ -n "$bark_server" ] || { echo "bark server is empty" >&2; exit 1; }
         local ts body
         ts="$(now_time)"
-        body="$(bark_template_body "203.0.113.200" "${threshold:-20}" test "$ts")"
-        bark_send "BlockadeIP 测试推送" "$body" && echo "bark test sent" || { echo "bark test failed" >&2; exit 1; }
+        case "${notify_type:-bark}" in
+                webhook)
+                        [ -n "$webhook_url" ] || { echo "webhook url is empty" >&2; exit 1; }
+                        webhook_send "203.0.113.200" "${threshold:-20}" test "$ts" \
+                                && echo "notify test sent" || { echo "notify test failed" >&2; exit 1; }
+                        ;;
+                *)
+                        [ -n "$bark_server" ] || { echo "bark server is empty" >&2; exit 1; }
+                        body="$(bark_template_body "203.0.113.200" "${threshold:-20}" test "$ts")"
+                        bark_send "BlockadeIP 测试推送" "$body" \
+                                && echo "notify test sent" || { echo "notify test failed" >&2; exit 1; }
+                        ;;
+        esac
 }
+
+cmd_bark_test() { cmd_notify_test; }
 
 login_button_targets() {
         for f in /usr/lib/lua/luci/view/themes/argon/sysauth.htm /usr/lib/lua/luci/view/themes/*/sysauth.htm /usr/share/ucode/luci/template/themes/*/sysauth.ut; do
@@ -614,9 +797,10 @@ case "$1" in
         set-enabled) shift; cmd_set_enabled "$@" ;;
         set-autostart) shift; cmd_set_autostart "$@" ;;
         save-config) shift; cmd_save_config "$@" ;;
+        save-notify) shift; cmd_save_notify "$@" ;;
         simulate) shift; cmd_simulate "$@" ;;
         clear-logs) cmd_clear_logs ;;
-        bark-test) cmd_bark_test ;;
+        notify-test|bark-test) cmd_notify_test ;;
         login-button) shift; cmd_login_button "$@" ;;
         status-json) cmd_status_json ;;
         banlist-json) cmd_banlist_json ;;
@@ -624,5 +808,5 @@ case "$1" in
         config-json) cmd_config_json ;;
         public) update_public ;;
         daemon) cmd_daemon ;;
-        *) echo "Usage: blockadeip {init|add|del|flush|stop|reload|set-config|set-enabled|set-autostart|save-config|simulate|status-json|banlist-json|logs-json|config-json|clear-logs|bark-test|login-button|public|daemon}" >&2; exit 1 ;;
+        *) echo "Usage: blockadeip {init|add|del|flush|stop|reload|set-config|set-enabled|set-autostart|save-config|save-notify|simulate|status-json|banlist-json|logs-json|config-json|clear-logs|notify-test|bark-test|login-button|public|daemon}" >&2; exit 1 ;;
 esac

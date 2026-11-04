@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=blockadeip
-PKG_VERSION:=1.4.3
+PKG_VERSION:=1.5.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=sogbtt
@@ -28,6 +28,8 @@ define Package/blockadeip/conffiles
 /etc/blockadeip/banlist
 /etc/blockadeip/records.tsv
 /etc/blockadeip/blockadeip.log
+/etc/blockadeip/webhook.body
+/etc/blockadeip/webhook.headers
 endef
 
 define Package/blockadeip/install
@@ -37,6 +39,8 @@ define Package/blockadeip/install
 	$(INSTALL_DATA) ./files/etc/blockadeip/banlist $(1)/etc/blockadeip/banlist
 	$(INSTALL_DATA) ./files/etc/blockadeip/records.tsv $(1)/etc/blockadeip/records.tsv
 	$(INSTALL_DATA) ./files/etc/blockadeip/blockadeip.log $(1)/etc/blockadeip/blockadeip.log
+	$(INSTALL_CONF) ./files/etc/blockadeip/webhook.body $(1)/etc/blockadeip/webhook.body
+	$(INSTALL_CONF) ./files/etc/blockadeip/webhook.headers $(1)/etc/blockadeip/webhook.headers
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/blockadeip $(1)/etc/init.d/blockadeip
 	$(INSTALL_DIR) $(1)/usr/sbin
