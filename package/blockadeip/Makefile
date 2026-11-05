@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=blockadeip
-PKG_VERSION:=1.4.3
+PKG_VERSION:=1.6.2
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=sogbtt
@@ -13,11 +13,11 @@ define Package/blockadeip
   CATEGORY:=Network
   TITLE:=BlockadeIP early inbound blocker
   PKGARCH:=all
-  DEPENDS:=+iptables +ipset +jsonfilter +rpcd +logd
+  DEPENDS:=+nftables-json +kmod-nft-core +jsonfilter +rpcd +logd
 endef
 
 define Package/blockadeip/description
-BlockadeIP uses iptables raw PREROUTING with ipset to block high-risk source IPs early, with persistent records, public deterrence page and LuCI RPC backend.
+BlockadeIP uses nftables (independent inet table with a prerouting/raw priority chain) to block high-risk source IPs early, with persistent records, public deterrence page and LuCI RPC backend. ipset/iptables fallback is kept for legacy systems.
 endef
 
 define Build/Compile
@@ -28,6 +28,8 @@ define Package/blockadeip/conffiles
 /etc/blockadeip/banlist
 /etc/blockadeip/records.tsv
 /etc/blockadeip/blockadeip.log
+/etc/blockadeip/webhook.body
+/etc/blockadeip/webhook.headers
 endef
 
 define Package/blockadeip/install
@@ -37,6 +39,8 @@ define Package/blockadeip/install
 	$(INSTALL_DATA) ./files/etc/blockadeip/banlist $(1)/etc/blockadeip/banlist
 	$(INSTALL_DATA) ./files/etc/blockadeip/records.tsv $(1)/etc/blockadeip/records.tsv
 	$(INSTALL_DATA) ./files/etc/blockadeip/blockadeip.log $(1)/etc/blockadeip/blockadeip.log
+	$(INSTALL_CONF) ./files/etc/blockadeip/webhook.body $(1)/etc/blockadeip/webhook.body
+	$(INSTALL_CONF) ./files/etc/blockadeip/webhook.headers $(1)/etc/blockadeip/webhook.headers
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/blockadeip $(1)/etc/init.d/blockadeip
 	$(INSTALL_DIR) $(1)/usr/sbin

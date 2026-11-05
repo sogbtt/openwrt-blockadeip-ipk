@@ -2,9 +2,19 @@ name: Build OpenWrt BlockadeIP IPK
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: '要构建的提交 / 标签（留空则使用当前分支最新提交）'
+        required: false
+        default: ''
   push:
     branches:
       - main
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -12,6 +22,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
 
       - name: Install host dependencies
         run: |
@@ -62,3 +75,52 @@ jobs:
         with:
           name: openwrt-blockadeip-ipk-x86_64-24.10.0
           path: artifact/*.ipk
+
+      - name: Extract package version
+        id: pkg
+        run: |
+          ver=$(grep -m1 '^PKG_VERSION:=' package/blockadeip/Makefile | cut -d= -f2 | tr -d ' ')
+          rel=$(grep -m1 '^PKG_RELEASE:=' package/blockadeip/Makefile | cut -d= -f2 | tr -d ' ')
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "release_r=$rel" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release notes
+        id: notes
+        run: |
+          f="docs/releasenotes/${GITHUB_REF_NAME}.md"
+          ver="${{ steps.pkg.outputs.version }}"
+          rel="${{ steps.pkg.outputs.release_r }}"
+          install_block() {
+            echo "## 安装"
+            echo
+            echo "适用系统：OpenWrt / ImmortalWrt 24.10+（架构 \`all\`，x86_64 / ARM 通用）"
+            echo
+            echo '```sh'
+            echo "opkg install blockadeip_${ver}-r${rel}_all.ipk"
+            echo "opkg install luci-app-blockadeip_${ver}-r${rel}_all.ipk"
+            echo "/etc/init.d/blockadeip enable"
+            echo "/etc/init.d/blockadeip start"
+            echo "/etc/init.d/rpcd restart"
+            echo '```'
+          }
+          if [ -f "$f" ]; then
+            { cat "$f"; echo; install_block; } > /tmp/release-notes.md
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            { echo "## BlockadeIP ${GITHUB_REF_NAME}"; echo; install_block; } > /tmp/release-notes.md
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "path=/tmp/release-notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          overwrite_files: true
+          files: artifact/*.ipk
+          fail_on_unmatched_files: true
+          body_path: ${{ steps.notes.outputs.path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
