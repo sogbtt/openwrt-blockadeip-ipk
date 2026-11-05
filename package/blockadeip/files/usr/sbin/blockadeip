@@ -13,7 +13,7 @@ BANLIST="/etc/blockadeip/banlist"
 RECORDS="/etc/blockadeip/records.tsv"
 LOG_PATH="/etc/blockadeip/blockadeip.log"
 VERSION="1.6.2"
-CHANGELOG="V1.6.2: 修复规则配置页表单对齐，按钮组与关键词输入区统一缩进；修复日志记录表格原因列过窄导致行高异常；修复通知页 Headers/Body 输入框对齐。V1.6.1: 封禁后端可在页面切换（自动/仅 nftables/ipset），切换时自动清理旧后端残留规则；封禁时长可视化配置（0 为永久），概览页展示后端与时长；新增过期封禁自动清理，避免到期 IP 永久卡在封禁列表。V1.6.0: 封禁后端迁移到原生 nftables，使用独立表 inet blockadeip 与 prerouting/raw 优先级，支持封禁超时，重启自动恢复；保留 ipset/iptables 回退；停用服务会移除拦截规则；批量恢复封禁列表显著降低小内存设备开销。V1.5.0: 通知层抽象，新增通用 Webhook 推送，支持自定义 URL、请求方法、Headers、Body 与 {ip}{reason}{count}{time}{title} 及 JSON/URL 编码变体；Bark 配置保持向后兼容；通知发送移出封禁锁避免阻塞封禁；新增通知测试与模板文件。V1.4.3: 固化已验证的 rpcd 层 banlist_json 修复，避免 LuCI 封禁列表空白；固化 Argon 登录页按钮插入位置与实测 CSS。V1.4.2: 修复已封禁列表原因列显示英文、修复 banlist-json JSON 输出异常、登录页按钮严格按实测样式注入。V1.4.1: 修复Bark提示堆叠、Bark换行显示、已封禁列表为空、表格排版细节。V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
+CHANGELOG="V1.6.2: 修复规则配置页表单对齐，按钮组与关键词输入区统一缩进；修复日志记录表格原因列过窄导致行高异常；修复通知页 Headers/Body 输入框对齐；修复 ipset 后端不支持封禁时长的问题，旧集合自动重建并回填元素。V1.6.1: 封禁后端可在页面切换（自动/仅 nftables/ipset），切换时自动清理旧后端残留规则；封禁时长可视化配置（0 为永久），概览页展示后端与时长；新增过期封禁自动清理，避免到期 IP 永久卡在封禁列表。V1.6.0: 封禁后端迁移到原生 nftables，使用独立表 inet blockadeip 与 prerouting/raw 优先级，支持封禁超时，重启自动恢复；保留 ipset/iptables 回退；停用服务会移除拦截规则；批量恢复封禁列表显著降低小内存设备开销。V1.5.0: 通知层抽象，新增通用 Webhook 推送，支持自定义 URL、请求方法、Headers、Body 与 {ip}{reason}{count}{time}{title} 及 JSON/URL 编码变体；Bark 配置保持向后兼容；通知发送移出封禁锁避免阻塞封禁；新增通知测试与模板文件。V1.4.3: 固化已验证的 rpcd 层 banlist_json 修复，避免 LuCI 封禁列表空白；固化 Argon 登录页按钮插入位置与实测 CSS。V1.4.2: 修复已封禁列表原因列显示英文、修复 banlist-json JSON 输出异常、登录页按钮严格按实测样式注入。V1.4.1: 修复Bark提示堆叠、Bark换行显示、已封禁列表为空、表格排版细节。V1.4: 修复Bark保存与测试推送；新增LuCI登录页公开处刑入口；完善中文更新日志；修复表格错位和排序；模拟测试封直接触发封禁；新增清空日志；TAB保存后停留当前页。V1.3: 持久化封禁记录、匹配关键词配置、服务开关、局域网保护、Bark配置。V1.2: 重启恢复封禁、自动识别WEB爆破。V1.1: LuCI基础管理和公开页。"
 REPO_URL="https://github.com/sogbtt/openwrt-blockadeip-ipk"
 
 mkdirs() {
@@ -264,17 +264,59 @@ nft_element_count() {
         echo "${n:-0}"
 }
 
-# 清理已过期（nft 集合中已不存在）的封禁记录，仅 nft + ban_time > 0 时执行
+ipset_alive_ips() {
+        ipset list "$set_name" 2>/dev/null \
+                | awk 'BEGIN{inMembers=0} /^Members:/{inMembers=1; next} inMembers && NF{print $1}'
+}
+
+ipset_element_count() {
+        local n
+        n="$(ipset_alive_ips | grep -c '[0-9]')"
+        echo "${n:-0}"
+}
+
+# 确保 ipset 集合支持 per-element timeout。
+# ipset 的 timeout 属性只能在 create 时指定，已存在且未启用超时的集合需重建后回填元素。
+ipset_ensure_timeout_capable() {
+        command -v ipset >/dev/null 2>&1 || return 1
+        local header members tmp="$STATE_DIR/ipset-rebuild.$$"
+        mkdir -p "$STATE_DIR"
+        if ipset list "$set_name" >/dev/null 2>&1; then
+                header="$(ipset list "$set_name" -t 2>/dev/null)"
+                # hash:ip 未启用 timeout 时，-t 的 Header 行不会出现 timeout 字段
+                if echo "$header" | grep -qi 'timeout'; then
+                        return 0
+                fi
+                members="$(ipset_alive_ips)"
+                [ -n "$members" ] && printf '%s\n' "$members" > "$tmp"
+                ipset destroy "$set_name" 2>/dev/null
+                ipset create "$set_name" hash:ip family inet maxelem 65536 timeout 0 -exist 2>/dev/null || return 1
+                if [ -s "$tmp" ]; then
+                        while read -r m; do
+                                [ -n "$m" ] || continue
+                                ipset add "$set_name" "$m" -exist 2>/dev/null
+                        done < "$tmp"
+                        rm -f "$tmp"
+                fi
+                return 0
+        fi
+        ipset create "$set_name" hash:ip family inet maxelem 65536 timeout 0 -exist 2>/dev/null
+}
+
+# 清理已过期（集合中已不存在）的封禁记录，仅 ban_time > 0 时执行
 prune_expired() {
         local rt alive stale first=1 ips="" tmp="$STATE_DIR"
         [ "${ban_time:-0}" -gt 0 ] 2>/dev/null || return 0
         rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"
-        [ "$rt" = "nft" ] || return 0
-        nft_table_exists || return 0
+        case "$rt" in
+                nft) nft_table_exists || return 0; alive="$(nft_alive_ips)" ;;
+                ipset) command -v ipset >/dev/null 2>&1 || return 0
+                       ipset list "$set_name" >/dev/null 2>&1 || return 0
+                       alive="$(ipset_alive_ips)" ;;
+                *) return 0 ;;
+        esac
         [ -f "$BANLIST" ] || return 0
         mkdir -p "$tmp"
-
-        alive="$(nft_alive_ips)"
         stale="$(awk -v alive="$(printf '%s' "$alive" | tr '\n' ' ')" '
                 BEGIN {
                         n = split(alive, arr, " ")
@@ -321,7 +363,14 @@ backend_add() {
                                 nft add element inet "$NFT_TABLE" v4 "{ $ip }" 2>/dev/null
                         fi
                         ;;
-                ipset) ipset add "$set_name" "$ip" -exist 2>/dev/null ;;
+                ipset)
+                        if [ "${ban_time:-0}" -gt 0 ] 2>/dev/null; then
+                                ipset add "$set_name" "$ip" timeout "$ban_time" -exist 2>/dev/null \
+                                        || ipset add "$set_name" "$ip" -exist 2>/dev/null
+                        else
+                                ipset add "$set_name" "$ip" -exist 2>/dev/null
+                        fi
+                        ;;
                 chain) iptables -t raw -C "$chain_name" -s "$ip" -j DROP 2>/dev/null || iptables -t raw -A "$chain_name" -s "$ip" -j DROP ;;
                 *) return 1 ;;
         esac
@@ -352,7 +401,7 @@ ensure_backend() {
         fi
         if [ "$backend" = "auto" ] || [ "$backend" = "ipset" ]; then
                 if command -v ipset >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
-                        ipset create "$set_name" hash:ip family inet maxelem 65536 -exist 2>/dev/null || true
+                        ipset_ensure_timeout_capable || ipset create "$set_name" hash:ip family inet maxelem 65536 -exist 2>/dev/null || true
                         iptables -t raw -C PREROUTING -m set --match-set "$set_name" src -j DROP 2>/dev/null || \
                                 iptables -t raw -I PREROUTING -m set --match-set "$set_name" src -j DROP
                         echo ipset > "$RUNTIME_BACKEND"
@@ -388,6 +437,9 @@ restore_banlist() {
                         } | nft -f - 2>/dev/null
                 fi
         else
+                if [ "$rt" = "ipset" ] && [ "${ban_time:-0}" -gt 0 ] 2>/dev/null; then
+                        ipset flush "$set_name" 2>/dev/null
+                fi
                 while read -r ip; do
                         case "$ip" in ''|\#*) continue ;; esac
                         valid_ip4 "$ip" || continue
@@ -667,14 +719,16 @@ cmd_status_json() {
         if pgrep -f '/usr/sbin/blockadeip daemon' >/dev/null 2>&1; then running=1; fi
         /etc/init.d/blockadeip enabled >/dev/null 2>&1 && autostart=1
         rt="$(cat "$RUNTIME_BACKEND" 2>/dev/null)"; [ -n "$rt" ] || rt="unknown"
+        # 有时长时以集合元素为准，避免过期 IP 虚高
+        if [ "${ban_time:-0}" -gt 0 ] 2>/dev/null; then
+                case "$rt" in
+                        nft) nft_table_exists && banned="$(nft_element_count)" ;;
+                        ipset) command -v ipset >/dev/null 2>&1 && ipset list "$set_name" >/dev/null 2>&1 && banned="$(ipset_element_count)" ;;
+                esac
+        fi
         # nft 表被外部 flush（fw4 reload 等）时如实报告，提示用户重载
-        if [ "$rt" = "nft" ]; then
-                if nft_table_exists; then
-                        # nft + 有时长时以集合元素为准，避免过期 IP 虚高
-                        [ "${ban_time:-0}" -gt 0 ] 2>/dev/null && banned="$(nft_element_count)"
-                else
-                        rt="nft-missing"
-                fi
+        if [ "$rt" = "nft" ] && ! nft_table_exists; then
+                rt="nft-missing"
         fi
         [ -n "${banned:-}" ] || banned="$(grep -cv '^\s*$' "$BANLIST" 2>/dev/null || echo 0)"
         repo="$(printf '%s' "$repo_url" | json_escape)"
