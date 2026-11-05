@@ -5,8 +5,9 @@
 #   - Gitea 侧用 actions/gitea-release-action 发布，说明取自 scripts/gen-release-notes.sh
 #
 # 在 Gitea 上使用时，需要：
-#   1. 仓库 Settings -> Actions 中配置 Secret：GITEA_TOKEN
+#   1. 仓库 Settings -> Actions 中配置 Secret：RELEASE_TOKEN
 #      （权限至少 write:repository，用于创建 Release 与上传资产）
+#      注意：Gitea 禁止 Secret 名称以 GITEA_ / GITHUB_ 开头，故不叫 GITEA_TOKEN
 #   2. runner 标签：ubuntu-22.04（或修改下方 runs-on）
 #   3. .github/workflows/build-ipk.yml 请在 Gitea 的 Actions 页面手动禁用，
 #      否则 Gitea 也会触发它（默认会同时扫描 .gitea 和 .github 两个目录）
@@ -168,7 +169,7 @@ jobs:
         uses: actions/gitea-release-action@v1
         with:
           # 需要 write:repository 权限
-          token: ${{ secrets.GITEA_TOKEN }}
+          token: ${{ secrets.RELEASE_TOKEN }}
           # body 用文件路径，避免 Markdown 在 with: 中被 YAML 折叠
           body_path: ${{ steps.notes.outputs.path }}
           files: |
