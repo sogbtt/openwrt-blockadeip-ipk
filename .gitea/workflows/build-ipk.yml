@@ -1,0 +1,175 @@
+# BlockadeIP 的 Gitea Actions 构建流程
+#
+# 与 .github/workflows/build-ipk.yml 并行维护，两边互不影响：
+#   - GitHub 侧继续用 softprops/action-gh-release 发布
+#   - Gitea 侧用 actions/gitea-release-action 发布，说明取自 scripts/gen-release-notes.sh
+#
+# 在 Gitea 上使用时，需要：
+#   1. 仓库 Settings -> Actions 中配置 Secret：GITEA_TOKEN
+#      （权限至少 write:repository，用于创建 Release 与上传资产）
+#   2. runner 标签：ubuntu-22.04（或修改下方 runs-on）
+#   3. .github/workflows/build-ipk.yml 请在 Gitea 的 Actions 页面手动禁用，
+#      否则 Gitea 也会触发它（默认会同时扫描 .gitea 和 .github 两个目录）
+#
+# 注意：Gitea 中不要使用 concurrency.group 里带 "/" 的值（act_runner 会拒绝）。
+
+name: Build IPK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '要构建的提交 / 标签（留空使用当前分支最新提交）'
+        required: false
+        default: ''
+
+env:
+  # OpenWrt SDK 版本与文件名
+  SDK_VERSION: 24.10.0
+  SDK_TARGET: x86/64
+  SDK_FILE: openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+
+  # SDK 下载地址前缀。搭建好内部 mirror 后改成镜像地址即可，例如：
+  #   OPENWRT_BASE: http://your-mirror:8080/openwrt
+  # 留空则直接使用官方源。
+  OPENWRT_BASE: ''
+
+jobs:
+  build:
+    name: build-ipk
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          # 变更日志需要完整 tag 历史，浅克隆会拿不到上一个 tag
+          fetch-depth: 0
+
+      - name: 安装构建依赖
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib \
+            gettext git libncurses5-dev libssl-dev python3-distutils \
+            rsync unzip zlib1g-dev file wget tar zstd jq ca-certificates
+
+      # 缓存 feeds 与 dl：feeds update -a 要拉取上百个 git 仓库，是真正的耗时点
+      - name: 缓存 OpenWrt feeds
+        uses: actions/cache@v4
+        with:
+          path: |
+            sdk/feeds
+            sdk/dl
+          key: openwrt-feeds-${{ env.SDK_VERSION }}-x86-64-v1
+
+      - name: 下载 OpenWrt SDK
+        run: |
+          set -eu
+          url_path="releases/${SDK_VERSION}/targets/${SDK_TARGET}/${SDK_FILE}"
+
+          # 依次尝试：内部镜像（若配置）-> 官方源
+          tried=0
+          for base in "${OPENWRT_BASE:-}" "https://downloads.openwrt.org"; do
+            [ -n "$base" ] || continue
+            tried=$((tried + 1))
+            url="${base%/}/${url_path}"
+            echo "尝试下载：$url"
+            if wget -q --show-progress --timeout=60 --tries=2 -O sdk.tar.zst "$url"; then
+              echo "下载成功：$url"
+              break
+            fi
+            echo "下载失败，尝试下一个源"
+            rm -f sdk.tar.zst
+          done
+
+          if [ ! -s sdk.tar.zst ]; then
+            echo "所有 SDK 源均下载失败" >&2
+            exit 1
+          fi
+
+          mkdir -p sdk
+          tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
+          rm -f sdk.tar.zst
+          echo "SDK 解压完成：$(ls sdk | head -5 | tr '\n' ' ')"
+
+      - name: 更新 feeds 并放入本仓库包
+        run: |
+          set -eu
+          cd sdk
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+          mkdir -p package/custom
+          cp -r ../package/blockadeip package/custom/blockadeip
+          cp -r ../package/luci-app-blockadeip package/custom/luci-app-blockadeip
+
+          {
+            echo "CONFIG_PACKAGE_blockadeip=m"
+            echo "CONFIG_PACKAGE_luci-app-blockadeip=m"
+          } > .config
+          make defconfig
+
+      - name: 编译 IPK
+        run: |
+          set -eu
+          cd sdk
+          make package/custom/blockadeip/compile V=s
+          make package/custom/luci-app-blockadeip/compile V=s
+
+      - name: 收集产物
+        run: |
+          set -eu
+          mkdir -p artifact
+          find sdk/bin/packages -name '*blockadeip*.ipk' -exec cp {} artifact/ \;
+          ls -lah artifact
+          count=$(find artifact -name '*.ipk' | wc -l)
+          if [ "$count" -lt 2 ]; then
+            echo "产物数量异常，期望 2 个 .ipk，实际 $count" >&2
+            exit 1
+          fi
+
+      - name: 上传 Actions 产物
+        uses: actions/upload-artifact@v3
+        with:
+          name: blockadeip-ipk
+          path: artifact/*.ipk
+
+      - name: 读取包版本
+        id: pkg
+        run: |
+          set -eu
+          ver=$(grep -m1 '^PKG_VERSION:=' package/blockadeip/Makefile | cut -d= -f2 | tr -d ' ')
+          rel=$(grep -m1 '^PKG_RELEASE:=' package/blockadeip/Makefile | cut -d= -f2 | tr -d ' ')
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "release=$rel" >> "$GITHUB_OUTPUT"
+          echo "包版本：$ver-r$rel"
+
+      - name: 生成发布说明
+        id: notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -eu
+          chmod +x scripts/gen-release-notes.sh
+          scripts/gen-release-notes.sh \
+            "${{ github.ref_name }}" \
+            "${{ steps.pkg.outputs.version }}" \
+            "${{ steps.pkg.outputs.release }}" > /tmp/release-notes.md
+          echo "说明长度：$(wc -c < /tmp/release-notes.md) 字节"
+          head -20 /tmp/release-notes.md
+          echo "path=/tmp/release-notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: 发布 Gitea Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/gitea-release-action@v1
+        with:
+          # 需要 write:repository 权限
+          token: ${{ secrets.GITEA_TOKEN }}
+          # body 用文件路径，避免 Markdown 在 with: 中被 YAML 折叠
+          body_path: ${{ steps.notes.outputs.path }}
+          files: |
+            artifact/*.ipk
